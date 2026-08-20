@@ -1,6 +1,9 @@
 -- Migration 001: Initial schema
 -- Create all tables with multi-tenancy support
 
+-- Required extension for uuid_generate_v4()
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 -- ========== TENANTS ==========
 CREATE TABLE tenants (
     id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

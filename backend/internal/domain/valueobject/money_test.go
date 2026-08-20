@@ -200,22 +200,27 @@ func TestMoneyEquals(t *testing.T) {
 }
 
 func TestMoneyIsNegative(t *testing.T) {
-	if !Money{Amount: -1, Currency: "USD"}.IsNegative() {
+	neg := Money{Amount: -1, Currency: "USD"}
+	if !neg.IsNegative() {
 		t.Error("-1 should be negative")
 	}
-	if Money{Amount: 0, Currency: "USD"}.IsNegative() {
+	zero := Money{Amount: 0, Currency: "USD"}
+	if zero.IsNegative() {
 		t.Error("0 should not be negative")
 	}
-	if Money{Amount: 1, Currency: "USD"}.IsNegative() {
+	pos := Money{Amount: 1, Currency: "USD"}
+	if pos.IsNegative() {
 		t.Error("1 should not be negative")
 	}
 }
 
 func TestMoneyIsZero(t *testing.T) {
-	if !Money{Amount: 0, Currency: "USD"}.IsZero() {
+	zero := Money{Amount: 0, Currency: "USD"}
+	if !zero.IsZero() {
 		t.Error("0 should be zero")
 	}
-	if Money{Amount: 1, Currency: "USD"}.IsZero() {
+	pos := Money{Amount: 1, Currency: "USD"}
+	if pos.IsZero() {
 		t.Error("1 should not be zero")
 	}
 }

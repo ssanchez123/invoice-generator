@@ -10,10 +10,10 @@ import (
 type InvoiceStatus string
 
 const (
-	InvoiceStatusDraft    InvoiceStatus = "draft"
-	InvoiceStatusIssued   InvoiceStatus = "issued"
+	InvoiceStatusDraft     InvoiceStatus = "draft"
+	InvoiceStatusIssued    InvoiceStatus = "issued"
 	InvoiceStatusPaid      InvoiceStatus = "paid"
-	InvoiceStatusOverdue  InvoiceStatus = "overdue"
+	InvoiceStatusOverdue   InvoiceStatus = "overdue"
 	InvoiceStatusCancelled InvoiceStatus = "cancelled"
 )
 
@@ -23,8 +23,8 @@ type InvoiceItem struct {
 	Description string
 	Quantity    int64
 	UnitPrice   valueobject.Money
-	TaxRateBPS  int64     // Tax rate in basis points (0 = tax-exempt)
-	DiscountBPS int64     // Discount in basis points (0 = no discount)
+	TaxRateBPS  int64 // Tax rate in basis points (0 = tax-exempt)
+	DiscountBPS int64 // Discount in basis points (0 = no discount)
 }
 
 // LineTotal computes the total for this item: quantity * unit_price, minus discount, plus tax.
@@ -85,10 +85,10 @@ type Invoice struct {
 
 	Items []InvoiceItem
 
-	Currency  string
-	Subtotal  valueobject.Money
-	TaxTotal  valueobject.Money
-	Total     valueobject.Money
+	Currency string
+	Subtotal valueobject.Money
+	TaxTotal valueobject.Money
+	Total    valueobject.Money
 
 	Notes    string
 	Metadata map[string]any
@@ -160,9 +160,9 @@ func (inv *Invoice) Cancel() error {
 	return nil
 }
 
-// MarkPaid transitions the invoice to paid (from issued).
+// MarkPaid transitions the invoice to paid (from issued or overdue).
 func (inv *Invoice) MarkPaid(at time.Time) error {
-	if inv.Status != InvoiceStatusIssued {
+	if inv.Status != InvoiceStatusIssued && inv.Status != InvoiceStatusOverdue {
 		return ErrInvalidStatusTransition
 	}
 	inv.Status = InvoiceStatusPaid
@@ -199,8 +199,8 @@ func (inv *Invoice) ApplyPayment(amount valueobject.Money, at time.Time) error {
 	inv.Events = append(inv.Events, PaymentRecordedEvent{
 		InvoiceID:   inv.ID,
 		TenantIDVal: inv.TenantID,
-		Amount:       amount,
-		PaidAt:       at,
+		Amount:      amount,
+		PaidAt:      at,
 	})
 
 	return nil

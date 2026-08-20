@@ -15,8 +15,8 @@ import (
 // InMemoryInvoiceRepository is a test double for InvoiceRepository.
 // It implements the same port but stores data in memory — no PostgreSQL needed.
 type InMemoryInvoiceRepository struct {
-	mu       sync.RWMutex
-	invoices map[string]*entity.Invoice
+	mu        sync.RWMutex
+	invoices  map[string]*entity.Invoice
 	sequences map[string]int // tenant_id -> last seq
 }
 

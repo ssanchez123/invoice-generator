@@ -11,9 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/santiagossaa/invoice-generator/internal/api/middleware"
 	commandHandler "github.com/santiagossaa/invoice-generator/internal/application/command"
 	queryHandler "github.com/santiagossaa/invoice-generator/internal/application/query"
-	"github.com/santiagossaa/invoice-generator/internal/api/middleware"
 	"github.com/santiagossaa/invoice-generator/internal/domain/entity"
 	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 	"github.com/santiagossaa/invoice-generator/internal/domain/valueobject"
@@ -116,22 +116,22 @@ func mapDomainError(err error) (int, string) {
 // Since entity.Invoice has unexported fields (via valueobject types),
 // we need a DTO to serialize all fields properly.
 type invoiceDTO struct {
-	ID         string          `json:"id"`
-	TenantID   string          `json:"tenant_id"`
-	CustomerID string          `json:"customer_id"`
-	Number     string          `json:"number"`
-	Status     string          `json:"status"`
-	IssueDate  *time.Time      `json:"issue_date,omitempty"`
-	DueDate    time.Time       `json:"due_date"`
-	Currency   string          `json:"currency"`
-	Subtotal   int64           `json:"subtotal"`
-	TaxTotal   int64           `json:"tax_total"`
-	Total      int64           `json:"total"`
+	ID         string           `json:"id"`
+	TenantID   string           `json:"tenant_id"`
+	CustomerID string           `json:"customer_id"`
+	Number     string           `json:"number"`
+	Status     string           `json:"status"`
+	IssueDate  *time.Time       `json:"issue_date,omitempty"`
+	DueDate    time.Time        `json:"due_date"`
+	Currency   string           `json:"currency"`
+	Subtotal   int64            `json:"subtotal"`
+	TaxTotal   int64            `json:"tax_total"`
+	Total      int64            `json:"total"`
 	Items      []invoiceItemDTO `json:"items"`
-	Notes      string          `json:"notes,omitempty"`
-	Metadata   map[string]any  `json:"metadata,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
-	UpdatedAt  time.Time       `json:"updated_at"`
+	Notes      string           `json:"notes,omitempty"`
+	Metadata   map[string]any   `json:"metadata,omitempty"`
+	CreatedAt  time.Time        `json:"created_at"`
+	UpdatedAt  time.Time        `json:"updated_at"`
 }
 
 type invoiceItemDTO struct {
@@ -170,8 +170,8 @@ func invoiceToDTO(inv *entity.Invoice) invoiceDTO {
 		Items:      items,
 		Notes:      inv.Notes,
 		Metadata:   inv.Metadata,
-		CreatedAt:   inv.CreatedAt,
-		UpdatedAt:   inv.UpdatedAt,
+		CreatedAt:  inv.CreatedAt,
+		UpdatedAt:  inv.UpdatedAt,
 	}
 
 	if !inv.IssueDate.IsZero() {
@@ -210,16 +210,16 @@ func paymentToDTO(p *entity.Payment) paymentDTO {
 
 // customerDTO is the JSON representation of a customer entity.
 type customerDTO struct {
-	ID        string            `json:"id"`
-	TenantID  string            `json:"tenant_id"`
-	Name      string            `json:"name"`
-	Email     string            `json:"email,omitempty"`
-	Phone     string            `json:"phone,omitempty"`
+	ID        string              `json:"id"`
+	TenantID  string              `json:"tenant_id"`
+	Name      string              `json:"name"`
+	Email     string              `json:"email,omitempty"`
+	Phone     string              `json:"phone,omitempty"`
 	Address   valueobject.Address `json:"address"`
-	TaxID     string            `json:"tax_id,omitempty"`
-	Metadata  map[string]any    `json:"metadata,omitempty"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	TaxID     string              `json:"tax_id,omitempty"`
+	Metadata  map[string]any      `json:"metadata,omitempty"`
+	CreatedAt time.Time           `json:"created_at"`
+	UpdatedAt time.Time           `json:"updated_at"`
 }
 
 func customerToDTO(c *entity.Customer) customerDTO {
@@ -728,7 +728,7 @@ func CreateSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]any{
-		"message": "create subscription — scaffold",
+		"message":  "create subscription — scaffold",
 		"received": req,
 	})
 }

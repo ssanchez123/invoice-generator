@@ -14,9 +14,9 @@ type Money struct {
 }
 
 const (
-	// Default precision: cents (2 decimal places)
-	// Some currencies use 0 (JPY) or 3 (KWD) decimal places.
-	// For simplicity in this showcase, we use 2 decimal places for all currencies.
+// Default precision: cents (2 decimal places)
+// Some currencies use 0 (JPY) or 3 (KWD) decimal places.
+// For simplicity in this showcase, we use 2 decimal places for all currencies.
 )
 
 func NewMoney(amount int64, currency string) (Money, error) {

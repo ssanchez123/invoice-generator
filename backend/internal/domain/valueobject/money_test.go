@@ -110,7 +110,7 @@ func TestMoneyMultiply(t *testing.T) {
 func TestMoneyMultiplyBasisPoints(t *testing.T) {
 	t.Run("19% tax", func(t *testing.T) {
 		m := Money{Amount: 10000, Currency: "USD"} // $100.00
-		tax := m.MultiplyBasisPoints(1900)          // 19%
+		tax := m.MultiplyBasisPoints(1900)         // 19%
 		if tax.Amount != 1900 {
 			t.Errorf("MultiplyBasisPoints(1900) = %d, want 1900 ($19.00)", tax.Amount)
 		}

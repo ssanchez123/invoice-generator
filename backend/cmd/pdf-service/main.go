@@ -116,8 +116,8 @@ func (s *PDFService) processJobs(ctx context.Context) error {
 
 func (s *PDFService) generateInvoicePDF(ctx context.Context, entry port.OutboxEntry) error {
 	var event struct {
-		InvoiceID string `json:"InvoiceID"`
-		TenantID  string `json:"TenantID"`
+		InvoiceID string    `json:"InvoiceID"`
+		TenantID  string    `json:"TenantID"`
 		IssuedAt  time.Time `json:"IssuedAt"`
 	}
 	if err := json.Unmarshal(entry.Payload, &event); err != nil {
@@ -192,9 +192,9 @@ type domainEvent struct {
 	payload     []byte
 }
 
-func (e domainEvent) EventName() string      { return e.name }
+func (e domainEvent) EventName() string     { return e.name }
 func (e domainEvent) AggregateID() string   { return e.aggregateID }
-func (e domainEvent) TenantID() string       { return e.tenantID }
+func (e domainEvent) TenantID() string      { return e.tenantID }
 func (e domainEvent) OccurredAt() time.Time { return time.Now() }
 
 // invoiceHTMLTemplate is the HTML template for invoice PDFs.

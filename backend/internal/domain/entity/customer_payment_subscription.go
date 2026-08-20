@@ -14,7 +14,7 @@ var (
 	ErrIssueAfterDue           = errors.New("issue date cannot be after due date")
 	ErrItemNotFound            = errors.New("invoice item not found")
 	ErrInsufficientPayment     = errors.New("payment amount exceeds invoice total")
-	ErrDuplicatePayment         = errors.New("payment already recorded for this invoice")
+	ErrDuplicatePayment        = errors.New("payment already recorded for this invoice")
 )
 
 // Customer is the recipient of invoices.
@@ -66,7 +66,7 @@ type Payment struct {
 type SubscriptionStatus string
 
 const (
-	SubscriptionStatusActive   SubscriptionStatus = "active"
+	SubscriptionStatusActive    SubscriptionStatus = "active"
 	SubscriptionStatusPaused    SubscriptionStatus = "paused"
 	SubscriptionStatusCancelled SubscriptionStatus = "cancelled"
 )
@@ -81,15 +81,15 @@ const (
 )
 
 type Subscription struct {
-	ID             string
-	TenantID       string
-	CustomerID     string
-	PlanItems      []InvoiceItem // template for generated invoices
-	Frequency      BillingFrequency
+	ID              string
+	TenantID        string
+	CustomerID      string
+	PlanItems       []InvoiceItem // template for generated invoices
+	Frequency       BillingFrequency
 	NextBillingDate time.Time
-	Status         SubscriptionStatus
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	Status          SubscriptionStatus
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // AdvanceBillingDate moves next_billing_date to the next occurrence.

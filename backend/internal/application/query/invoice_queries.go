@@ -10,13 +10,13 @@ import (
 
 // ListInvoicesQuery returns a paginated list of invoices for a tenant.
 type ListInvoicesQuery struct {
-	TenantID string
-	Status   *entity.InvoiceStatus
+	TenantID   string
+	Status     *entity.InvoiceStatus
 	CustomerID *string
-	FromDate *time.Time
-	ToDate   *time.Time
-	Limit    int
-	Offset   int
+	FromDate   *time.Time
+	ToDate     *time.Time
+	Limit      int
+	Offset     int
 }
 
 type ListInvoicesHandler struct {
@@ -34,18 +34,18 @@ func NewListInvoicesHandler(ir port.InvoiceRepository) *ListInvoicesHandler {
 // InvoiceReadModel is the DTO returned by queries.
 // It's NOT the domain entity — it's a flattened view for the read side.
 type InvoiceReadModel struct {
-	ID         string                    `json:"id"`
-	Number     string                    `json:"number"`
-	CustomerID string                    `json:"customer_id"`
-	Status     string                    `json:"status"`
-	IssueDate  time.Time                  `json:"issue_date"`
-	DueDate    time.Time                  `json:"due_date"`
-	Currency   string                    `json:"currency"`
-	Subtotal   int64                     `json:"subtotal"`
-	TaxTotal   int64                     `json:"tax_total"`
-	Total      int64                     `json:"total"`
-	Items      []InvoiceItemReadModel     `json:"items"`
-	CreatedAt  time.Time                  `json:"created_at"`
+	ID         string                 `json:"id"`
+	Number     string                 `json:"number"`
+	CustomerID string                 `json:"customer_id"`
+	Status     string                 `json:"status"`
+	IssueDate  time.Time              `json:"issue_date"`
+	DueDate    time.Time              `json:"due_date"`
+	Currency   string                 `json:"currency"`
+	Subtotal   int64                  `json:"subtotal"`
+	TaxTotal   int64                  `json:"tax_total"`
+	Total      int64                  `json:"total"`
+	Items      []InvoiceItemReadModel `json:"items"`
+	CreatedAt  time.Time              `json:"created_at"`
 }
 
 type InvoiceItemReadModel struct {
@@ -101,7 +101,7 @@ func (h *ListInvoicesHandler) Handle(ctx context.Context, q ListInvoicesQuery) (
 			TaxTotal:   inv.TaxTotal.Amount,
 			Total:      inv.Total.Amount,
 			Items:      items,
-			CreatedAt:   inv.CreatedAt,
+			CreatedAt:  inv.CreatedAt,
 		})
 	}
 

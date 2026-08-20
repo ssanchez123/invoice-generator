@@ -79,7 +79,7 @@ func (h *CancelInvoiceHandler) Handle(ctx context.Context, cmd CancelInvoiceComm
 type RecordPaymentCommand struct {
 	InvoiceID string
 	TenantID  string
-	Amount    int64  // in minor units
+	Amount    int64 // in minor units
 	Currency  string
 	Method    string // "bank_transfer", "credit_card", "cash"
 	Reference string

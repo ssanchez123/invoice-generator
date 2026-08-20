@@ -10,11 +10,11 @@ import (
 // TaxRule defines how tax applies based on jurisdiction.
 // Tax rates are stored in basis points (100 = 1.00%, 1900 = 19.00%).
 type TaxRule struct {
-	Jurisdiction  string    // ISO 3166-1 alpha-2 country code, e.g., "CO", "US"
-	Region        string    // Optional region/state code, e.g., "CA", "NY"
-	RateBPS       int64     // Rate in basis points (1900 = 19%)
-	Description   string    // Human-readable description
-	EffectiveFrom time.Time // When this rule became active
+	Jurisdiction  string     // ISO 3166-1 alpha-2 country code, e.g., "CO", "US"
+	Region        string     // Optional region/state code, e.g., "CA", "NY"
+	RateBPS       int64      // Rate in basis points (1900 = 19%)
+	Description   string     // Human-readable description
+	EffectiveFrom time.Time  // When this rule became active
 	EffectiveTo   *time.Time // Optional: when this rule expired
 }
 

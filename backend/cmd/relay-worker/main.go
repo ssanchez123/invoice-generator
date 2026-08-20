@@ -41,7 +41,7 @@ func main() {
 
 	// Register event handlers
 	handlers := map[string]EventHandler{
-		"invoice.issued":      &InvoiceIssuedHandler{db: db},
+		"invoice.issued":       &InvoiceIssuedHandler{db: db},
 		"invoice.paid":         &InvoicePaidHandler{},
 		"payment.recorded":     &PaymentRecordedHandler{},
 		"pdf.generated":        &PDFGeneratedHandler{},

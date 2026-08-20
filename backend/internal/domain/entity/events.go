@@ -22,9 +22,9 @@ type InvoiceIssuedEvent struct {
 	IssuedAt    time.Time
 }
 
-func (e InvoiceIssuedEvent) EventName() string    { return "invoice.issued" }
-func (e InvoiceIssuedEvent) AggregateID() string { return e.InvoiceID }
-func (e InvoiceIssuedEvent) TenantID() string   { return e.TenantIDVal }
+func (e InvoiceIssuedEvent) EventName() string     { return "invoice.issued" }
+func (e InvoiceIssuedEvent) AggregateID() string   { return e.InvoiceID }
+func (e InvoiceIssuedEvent) TenantID() string      { return e.TenantIDVal }
 func (e InvoiceIssuedEvent) OccurredAt() time.Time { return e.IssuedAt }
 
 // InvoicePaidEvent fires when an invoice is fully paid.
@@ -34,35 +34,35 @@ type InvoicePaidEvent struct {
 	PaidAt      time.Time
 }
 
-func (e InvoicePaidEvent) EventName() string      { return "invoice.paid" }
-func (e InvoicePaidEvent) AggregateID() string    { return e.InvoiceID }
-func (e InvoicePaidEvent) TenantID() string       { return e.TenantIDVal }
+func (e InvoicePaidEvent) EventName() string     { return "invoice.paid" }
+func (e InvoicePaidEvent) AggregateID() string   { return e.InvoiceID }
+func (e InvoicePaidEvent) TenantID() string      { return e.TenantIDVal }
 func (e InvoicePaidEvent) OccurredAt() time.Time { return e.PaidAt }
 
 // PaymentRecordedEvent fires when any payment (partial or full) is recorded.
 type PaymentRecordedEvent struct {
 	InvoiceID   string
 	TenantIDVal string
-	Amount       valueobject.Money
-	PaidAt       time.Time
+	Amount      valueobject.Money
+	PaidAt      time.Time
 }
 
-func (e PaymentRecordedEvent) EventName() string      { return "payment.recorded" }
+func (e PaymentRecordedEvent) EventName() string     { return "payment.recorded" }
 func (e PaymentRecordedEvent) AggregateID() string   { return e.InvoiceID }
-func (e PaymentRecordedEvent) TenantID() string       { return e.TenantIDVal }
+func (e PaymentRecordedEvent) TenantID() string      { return e.TenantIDVal }
 func (e PaymentRecordedEvent) OccurredAt() time.Time { return e.PaidAt }
 
 // PDFGeneratedEvent fires when the PDF service completes generating an invoice PDF.
 type PDFGeneratedEvent struct {
-	InvoiceID    string
-	TenantIDVal  string
-	ArtifactURL  string
-	GeneratedAt  time.Time
+	InvoiceID   string
+	TenantIDVal string
+	ArtifactURL string
+	GeneratedAt time.Time
 }
 
-func (e PDFGeneratedEvent) EventName() string      { return "pdf.generated" }
+func (e PDFGeneratedEvent) EventName() string     { return "pdf.generated" }
 func (e PDFGeneratedEvent) AggregateID() string   { return e.InvoiceID }
-func (e PDFGeneratedEvent) TenantID() string       { return e.TenantIDVal }
+func (e PDFGeneratedEvent) TenantID() string      { return e.TenantIDVal }
 func (e PDFGeneratedEvent) OccurredAt() time.Time { return e.GeneratedAt }
 
 // SubscriptionRenewedEvent fires when a recurring subscription generates a new invoice.
@@ -73,7 +73,7 @@ type SubscriptionRenewedEvent struct {
 	RenewedAt      time.Time
 }
 
-func (e SubscriptionRenewedEvent) EventName() string      { return "subscription.renewed" }
-func (e SubscriptionRenewedEvent) AggregateID() string    { return e.SubscriptionID }
-func (e SubscriptionRenewedEvent) TenantID() string       { return e.TenantIDVal }
+func (e SubscriptionRenewedEvent) EventName() string     { return "subscription.renewed" }
+func (e SubscriptionRenewedEvent) AggregateID() string   { return e.SubscriptionID }
+func (e SubscriptionRenewedEvent) TenantID() string      { return e.TenantIDVal }
 func (e SubscriptionRenewedEvent) OccurredAt() time.Time { return e.RenewedAt }

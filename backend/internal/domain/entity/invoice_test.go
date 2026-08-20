@@ -26,7 +26,7 @@ func TestInvoiceItemLineTotal(t *testing.T) {
 		item := InvoiceItem{
 			Quantity:   2,
 			UnitPrice:  valueobject.Money{Amount: 5000, Currency: "USD"}, // $50.00
-			TaxRateBPS: 1900,                                                // 19%
+			TaxRateBPS: 1900,                                             // 19%
 		}
 		total, err := item.LineTotal()
 		if err != nil {
@@ -42,8 +42,8 @@ func TestInvoiceItemLineTotal(t *testing.T) {
 		item := InvoiceItem{
 			Quantity:    1,
 			UnitPrice:   valueobject.Money{Amount: 10000, Currency: "USD"}, // $100.00
-			TaxRateBPS:  1000,                                                 // 10%
-			DiscountBPS: 1000,                                                  // 10% discount
+			TaxRateBPS:  1000,                                              // 10%
+			DiscountBPS: 1000,                                              // 10% discount
 		}
 		total, err := item.LineTotal()
 		if err != nil {

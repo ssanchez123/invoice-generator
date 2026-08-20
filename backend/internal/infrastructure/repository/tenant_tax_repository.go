@@ -154,6 +154,6 @@ func (r *TaxRuleRepository) Resolve(ctx context.Context, jurisdiction string, re
 }
 
 var (
-	_ port.TenantRepository        = (*TenantRepository)(nil)
+	_ port.TenantRepository       = (*TenantRepository)(nil)
 	_ valueobject.TaxResolverPort = (*TaxRuleRepository)(nil)
 )

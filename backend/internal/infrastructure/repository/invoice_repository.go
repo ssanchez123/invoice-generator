@@ -11,10 +11,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/santiagossaa/invoice-generator/internal/ctxkey"
 	"github.com/santiagossaa/invoice-generator/internal/domain/entity"
 	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 	"github.com/santiagossaa/invoice-generator/internal/domain/valueobject"
-	"github.com/santiagossaa/invoice-generator/internal/ctxkey"
 )
 
 // Common errors
@@ -145,9 +145,9 @@ func (r *InvoiceRepository) saveEventsTx(ctx context.Context, tx pgx.Tx, tenantI
 // saveAuditTx writes an immutable audit entry.
 func (r *InvoiceRepository) saveAuditTx(ctx context.Context, tx pgx.Tx, inv *entity.Invoice) error {
 	payload, _ := json.Marshal(map[string]any{
-		"status":    string(inv.Status),
-		"total":     inv.Total.Amount,
-		"currency":  inv.Currency,
+		"status":     string(inv.Status),
+		"total":      inv.Total.Amount,
+		"currency":   inv.Currency,
 		"updated_at": inv.UpdatedAt,
 	})
 

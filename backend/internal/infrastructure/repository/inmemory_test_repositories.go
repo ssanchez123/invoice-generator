@@ -82,6 +82,32 @@ func (r *InMemoryInvoiceRepository) NextInvoiceNumber(ctx context.Context, tenan
 	return formatInvoiceNumber(year, seq), nil
 }
 
+func (r *InMemoryInvoiceRepository) FindByTenant(ctx context.Context, tenantID string, limit, offset int) ([]*entity.Invoice, int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var all []*entity.Invoice
+	for _, inv := range r.invoices {
+		if inv.TenantID == tenantID {
+			c := *inv
+			all = append(all, &c)
+		}
+	}
+
+	total := len(all)
+	if offset >= total {
+		return nil, total, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return all[offset:end], total, nil
+}
+
 func (r *InMemoryInvoiceRepository) FindOverdue(ctx context.Context, tenantID string, asOf time.Time) ([]*entity.Invoice, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

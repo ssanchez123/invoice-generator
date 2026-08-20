@@ -134,3 +134,15 @@ input, select, textarea {
   border-radius: 6px;
   font-size: 14px;
 }
+
+.swagger-link {
+  margin-top: auto;
+  font-size: 13px !important;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.swagger-link:hover {
+  opacity: 1;
+  background: transparent !important;
+}

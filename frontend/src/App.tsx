@@ -14,6 +14,9 @@ export default function App() {
         <NavLink to="/customers" className={({ isActive }) => isActive ? 'active' : ''}>
           Clientes
         </NavLink>
+        <a href="http://localhost:8080/swagger/" target="_blank" rel="noopener noreferrer" className="swagger-link">
+          📖 API Docs
+        </a>
       </nav>
       <main className="main-content">
         <Outlet />

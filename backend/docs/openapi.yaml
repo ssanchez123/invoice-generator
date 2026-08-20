@@ -1,0 +1,957 @@
+openapi: 3.0.3
+info:
+  title: Invoice Generator API
+  description: |
+    SaaS-ready invoice generator with multi-tenancy, multi-currency,
+    jurisdiction-aware tax rules, recurring billing, and PDF generation.
+
+    ## Architecture
+    - Hexagonal Architecture (Ports & Adapters)
+    - CQRS (Command Query Responsibility Segregation)
+    - Domain Events + Outbox Pattern
+    - Row-Level Security for tenant isolation
+
+    ## Authentication
+    All protected endpoints require a Bearer JWT token.
+    Obtain a token via `POST /api/v1/auth/login`.
+
+    ## Idempotency
+    POST endpoints that create or modify state support the `Idempotency-Key` header.
+    Provide a unique key (e.g., UUID) to safely retry requests without side effects.
+    Cached responses are returned for duplicate keys within a 24-hour window.
+  version: 1.0.0
+  contact:
+    name: Santiago SSAA
+    url: https://github.com/santiagossaa
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.invoicegen.example.com
+    description: Production
+
+tags:
+  - name: Auth
+    description: Authentication and tenant registration
+  - name: Invoices
+    description: Invoice lifecycle management
+  - name: Customers
+    description: Customer management
+  - name: Payments
+    description: Payment recording against invoices
+  - name: Subscriptions
+    description: Recurring billing management
+  - name: Audit
+    description: Immutable audit trail
+  - name: Health
+    description: Service health checks
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Returns service health status. No authentication required.
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new tenant
+      description: Creates a new tenant organization and admin user.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Tenant and user created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      description: Authenticates user and returns JWT token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/invoices:
+    post:
+      tags: [Invoices]
+      summary: Create invoice
+      description: |
+        Creates a new draft invoice. Supports idempotency via
+        the `Idempotency-Key` header to prevent duplicate invoices on retry.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvoiceRequest'
+      responses:
+        '201':
+          description: Invoice created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Idempotency key conflict
+    get:
+      tags: [Invoices]
+      summary: List invoices
+      description: Returns paginated list of invoices for the current tenant.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/InvoiceStatus'
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Paginated list of invoices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invoice'
+                  total:
+                    type: integer
+                    example: 42
+                  limit:
+                    type: integer
+                    example: 20
+                  offset:
+                    type: integer
+                    example: 0
+
+  /api/v1/invoices/{id}:
+    get:
+      tags: [Invoices]
+      summary: Get invoice detail
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Invoices]
+      summary: Update invoice (draft only)
+      description: Only invoices in draft status can be modified.
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInvoiceRequest'
+      responses:
+        '200':
+          description: Updated invoice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Invoice is not in draft status
+
+  /api/v1/invoices/{id}/issue:
+    post:
+      tags: [Invoices]
+      summary: Issue invoice
+      description: |
+        Transitions invoice from draft to issued.
+        Triggers PDF generation via the outbox pattern (async).
+        Issue date must not be after the due date.
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '409':
+          description: Invalid status transition or no items or issue after due date
+
+  /api/v1/invoices/{id}/cancel:
+    post:
+      tags: [Invoices]
+      summary: Cancel invoice
+      description: Cancels an invoice (from draft or issued status).
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Invoice cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '409':
+          description: Cannot cancel (paid or already cancelled)
+
+  /api/v1/invoices/{id}/payments:
+    post:
+      tags: [Payments]
+      summary: Record payment
+      description: |
+        Records a payment against an invoice.
+        If the cumulative payments equal or exceed the invoice total,
+        the invoice is automatically marked as paid.
+
+        Supports idempotency to prevent double payments.
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RecordPaymentRequest'
+      responses:
+        '201':
+          description: Payment recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Payment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          description: Payment amount exceeds invoice total
+    get:
+      tags: [Payments]
+      summary: List payments for invoice
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: List of payments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Payment'
+
+  /api/v1/invoices/{id}/pdf:
+    get:
+      tags: [Invoices]
+      summary: Download invoice PDF
+      description: |
+        Returns the PDF artifact for the invoice.
+        If the PDF hasn't been generated yet (async via outbox),
+        returns a 202 with a retry hint.
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: PDF file
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        '202':
+          description: PDF not yet generated, retry later
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/customers:
+    post:
+      tags: [Customers]
+      summary: Create customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+      responses:
+        '201':
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    get:
+      tags: [Customers]
+      summary: List customers
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Paginated list of customers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Customer'
+
+  /api/v1/customers/{id}:
+    get:
+      tags: [Customers]
+      summary: Get customer detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Customer detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Customer'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/subscriptions:
+    post:
+      tags: [Subscriptions]
+      summary: Create subscription
+      description: Creates a recurring billing subscription for a customer.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionRequest'
+      responses:
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+    get:
+      tags: [Subscriptions]
+      summary: List subscriptions
+      responses:
+        '200':
+          description: List of subscriptions
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Subscription'
+
+  /api/v1/subscriptions/{id}:
+    delete:
+      tags: [Subscriptions]
+      summary: Cancel subscription
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Subscription cancelled
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/audit:
+    get:
+      tags: [Audit]
+      summary: Query audit trail
+      description: Returns immutable audit entries filtered by entity type and ID.
+      parameters:
+        - name: entity_type
+          in: query
+          schema:
+            type: string
+            enum: [invoice, payment, customer, subscription]
+        - name: entity_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT Bearer token obtained via /api/v1/auth/login
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Unique key to prevent duplicate operations on retry (UUID recommended)
+      schema:
+        type: string
+        example: 550e8400-e29b-41d4-a716-446655440000
+    InvoiceId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        default: 20
+        minimum: 1
+        maximum: 100
+    Offset:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        default: 0
+        minimum: 0
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: invalid request body
+
+    InvoiceStatus:
+      type: string
+      enum: [draft, issued, paid, overdue, cancelled]
+      description: Invoice lifecycle state
+
+    BillingFrequency:
+      type: string
+      enum: [daily, weekly, monthly, yearly]
+
+    Money:
+      type: object
+      description: Monetary amount in integer minor units (cents)
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Amount in minor units (cents)
+          example: 1099
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          example: USD
+
+    Address:
+      type: object
+      properties:
+        line1:
+          type: string
+          example: Calle 100 #50-25
+        line2:
+          type: string
+        city:
+          type: string
+          example: Bogota
+        state:
+          type: string
+        postcode:
+          type: string
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code
+          example: CO
+
+    InvoiceItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        description:
+          type: string
+          example: Consulting services
+        quantity:
+          type: integer
+          format: int64
+          example: 10
+        unit_price:
+          type: integer
+          format: int64
+          description: Price per unit in minor units (cents)
+          example: 5000
+        tax_rate_bps:
+          type: integer
+          format: int64
+          description: Tax rate in basis points (1900 = 19%)
+          example: 1900
+        discount_bps:
+          type: integer
+          format: int64
+          description: Discount rate in basis points (1000 = 10%)
+          example: 0
+        total:
+          type: integer
+          format: int64
+          description: Computed line total in minor units
+          example: 59500
+
+    Invoice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        number:
+          type: string
+          example: INV-2024-00001
+        customer_id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/InvoiceStatus'
+        issue_date:
+          type: string
+          format: date-time
+          nullable: true
+        due_date:
+          type: string
+          format: date-time
+        currency:
+          type: string
+          example: USD
+        subtotal:
+          type: integer
+          format: int64
+          description: Sum of all line items before tax (minor units)
+        tax_total:
+          type: integer
+          format: int64
+          description: Total tax across all items (minor units)
+        total:
+          type: integer
+          format: int64
+          description: Subtotal + tax_total (minor units)
+        notes:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceItem'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateInvoiceRequest:
+      type: object
+      required: [customer_id, currency, due_date, items]
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          example: USD
+        due_date:
+          type: string
+          format: date-time
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [description, quantity, unit_price]
+            properties:
+              description:
+                type: string
+              quantity:
+                type: integer
+                format: int64
+                minimum: 1
+              unit_price:
+                type: integer
+                format: int64
+                description: Minor units (cents)
+              tax_rate_bps:
+                type: integer
+                format: int64
+                default: 0
+              discount_bps:
+                type: integer
+                format: int64
+                default: 0
+        notes:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    UpdateInvoiceRequest:
+      type: object
+      properties:
+        due_date:
+          type: string
+          format: date-time
+        notes:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceItem'
+
+    Customer:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: ACME Corp
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+        tax_id:
+          type: string
+          example: 900123456-7
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateCustomerRequest:
+      type: object
+      required: [name, address]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        address:
+          $ref: '#/components/schemas/Address'
+        tax_id:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+
+    Payment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        invoice_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+          description: Payment amount in minor units
+        currency:
+          type: string
+        method:
+          type: string
+          enum: [bank_transfer, credit_card, cash, crypto, other]
+          example: bank_transfer
+        reference:
+          type: string
+          example: TXN-001
+        paid_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    RecordPaymentRequest:
+      type: object
+      required: [amount, currency, method]
+      properties:
+        amount:
+          type: integer
+          format: int64
+          description: Payment amount in minor units (cents)
+        currency:
+          type: string
+        method:
+          type: string
+          enum: [bank_transfer, credit_card, cash, crypto, other]
+        reference:
+          type: string
+
+    Subscription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        frequency:
+          $ref: '#/components/schemas/BillingFrequency'
+        next_billing_date:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, paused, cancelled]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateSubscriptionRequest:
+      type: object
+      required: [customer_id, frequency, next_billing_date, items]
+      properties:
+        customer_id:
+          type: string
+          format: uuid
+        frequency:
+          $ref: '#/components/schemas/BillingFrequency'
+        next_billing_date:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              description:
+                type: string
+              quantity:
+                type: integer
+                format: int64
+              unit_price:
+                type: integer
+                format: int64
+              tax_rate_bps:
+                type: integer
+                format: int64
+
+    AuditEntry:
+      type: object
+      description: Immutable audit trail entry (insert-only)
+      properties:
+        id:
+          type: string
+          format: uuid
+        entity_type:
+          type: string
+          enum: [invoice, payment, customer, subscription]
+        entity_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          example: issued
+        actor_id:
+          type: string
+          format: uuid
+          nullable: true
+        payload:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    RegisterRequest:
+      type: object
+      required: [tenant_name, email, password]
+      properties:
+        tenant_name:
+          type: string
+          example: ACME Corp
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        expires_at:
+          type: string
+          format: date-time
+        tenant_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid

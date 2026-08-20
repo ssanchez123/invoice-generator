@@ -12,9 +12,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 
 	"github.com/santiagossaa/invoice-generator/internal/api/handler"
 	apimiddleware "github.com/santiagossaa/invoice-generator/internal/api/middleware"
+	"github.com/santiagossaa/invoice-generator/internal/api/swagger"
 	"github.com/santiagossaa/invoice-generator/internal/application/command"
 	"github.com/santiagossaa/invoice-generator/internal/application/query"
 	"github.com/santiagossaa/invoice-generator/internal/config"
@@ -94,6 +96,18 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+
+	// Swagger UI — interactive API docs at /swagger/*
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+		httpSwagger.DeepLinking(true),
+		httpSwagger.DocExpansion("none"),
+		httpSwagger.PersistAuthorization(true),
+	))
+
+	// OpenAPI spec endpoints
+	r.Get("/swagger/doc.json", swagger.SpecJSONHandler)
+	r.Get("/swagger/openapi.yaml", swagger.SpecYAMLHandler)
 
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {

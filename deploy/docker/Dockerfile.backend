@@ -24,6 +24,7 @@ COPY --from=builder /bin/api /usr/local/bin/api
 COPY --from=builder /bin/relay-worker /usr/local/bin/relay-worker
 COPY --from=builder /bin/pdf-service /usr/local/bin/pdf-service
 COPY --from=builder /app/migrations /migrations
+COPY --from=builder /app/docs /docs
 COPY migrate.sh /usr/local/bin/migrate.sh
 RUN chmod +x /usr/local/bin/migrate.sh
 

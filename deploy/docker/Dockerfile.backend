@@ -1,0 +1,32 @@
+# Backend API service
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+
+# Download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source
+COPY . .
+
+# Build
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/relay-worker ./cmd/relay-worker
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/pdf-service ./cmd/pdf-service
+
+# Final image
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata postgresql-client
+
+COPY --from=builder /bin/api /usr/local/bin/api
+COPY --from=builder /bin/relay-worker /usr/local/bin/relay-worker
+COPY --from=builder /bin/pdf-service /usr/local/bin/pdf-service
+COPY --from=builder /app/migrations /migrations
+COPY migrate.sh /usr/local/bin/migrate.sh
+RUN chmod +x /usr/local/bin/migrate.sh
+
+EXPOSE 8080
+
+CMD ["api"]

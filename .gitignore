@@ -1,0 +1,49 @@
+# Go
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Go compiled binaries (in backend root from `go build`)
+/backend/api
+/backend/pdf-service
+/backend/relay-worker
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+**/.DS_Store
+
+# Environment
+.env
+.env.local
+*.pem
+
+# PDFs (generated artifacts)
+*.pdf
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# Coverage
+coverage.out
+coverage.html
+
+# Local data
+pgdata/
+pdfdata/

@@ -23,12 +23,13 @@ func setupDeps() {
 	invoiceRepo := repository.NewInMemoryInvoiceRepository()
 	customerRepo := repository.NewInMemoryCustomerRepository()
 	paymentRepo := repository.NewInMemoryPaymentRepository()
+	uow := repository.NewInMemoryUnitOfWork()
 
 	testDeps = &handler.HandlerDeps{
 		CreateInvoice: commandHandler.NewCreateInvoiceHandler(invoiceRepo, customerRepo),
 		IssueInvoice:  commandHandler.NewIssueInvoiceHandler(invoiceRepo),
 		CancelInvoice: commandHandler.NewCancelInvoiceHandler(invoiceRepo),
-		RecordPayment: commandHandler.NewRecordPaymentHandler(invoiceRepo, paymentRepo),
+		RecordPayment: commandHandler.NewRecordPaymentHandler(invoiceRepo, paymentRepo, uow),
 		ListInvoices:  queryHandler.NewListInvoicesHandler(invoiceRepo),
 		GetInvoice:    queryHandler.NewGetInvoiceHandler(invoiceRepo),
 		ListCustomers: queryHandler.NewListCustomersHandler(customerRepo),

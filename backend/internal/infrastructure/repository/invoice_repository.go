@@ -181,6 +181,108 @@ func (r *InvoiceRepository) FindByID(ctx context.Context, id string) (*entity.In
 	return r.loadInvoice(ctx, conn, id)
 }
 
+// FindByIDForUpdate loads an invoice and acquires a row lock (SELECT FOR UPDATE).
+// Must be called within a transaction (provided via TxFromCtx).
+// This prevents concurrent modifications to the invoice while the transaction is open.
+func (r *InvoiceRepository) FindByIDForUpdate(ctx context.Context, id string) (*entity.Invoice, error) {
+	tx := port.TxFromCtx(ctx)
+	if tx == nil {
+		return nil, errors.New("FindByIDForUpdate requires a transaction in context")
+	}
+
+	// Load invoice header with FOR UPDATE lock
+	var inv entity.Invoice
+	var number string
+	var metadata []byte
+	var issueDate *time.Time
+
+	err := tx.QueryRow(ctx, `
+		SELECT id, tenant_id, customer_id, number, status, issue_date, due_date,
+		       currency, subtotal, tax_total, total, notes, metadata, created_at, updated_at
+		FROM invoices WHERE id =  AND deleted_at IS NULL
+		FOR UPDATE
+	`, id).Scan(
+		&inv.ID, &inv.TenantID, &inv.CustomerID, &number,
+		&inv.Status, &issueDate, &inv.DueDate,
+		&inv.Currency, &inv.Subtotal.Amount, &inv.TaxTotal.Amount, &inv.Total.Amount,
+		&inv.Notes, &metadata, &inv.CreatedAt, &inv.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("load invoice for update: %w", err)
+	}
+
+	if issueDate != nil {
+		inv.IssueDate = *issueDate
+	}
+
+	inv.Number = valueobject.InvoiceNumber{Value: number}
+	if metadata != nil {
+		json.Unmarshal(metadata, &inv.Metadata)
+	}
+
+	// Load items (no lock needed — items are only modified via the aggregate)
+	rows, err := tx.Query(ctx, `
+		SELECT id, description, quantity, unit_price, tax_rate_bps, discount_bps, total
+		FROM invoice_items WHERE invoice_id = 
+	`, id)
+	if err != nil {
+		return nil, fmt.Errorf("load items for update: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item entity.InvoiceItem
+		var lineTotal int64
+		err := rows.Scan(
+			&item.ID, &item.Description, &item.Quantity, &item.UnitPrice.Amount,
+			&item.TaxRateBPS, &item.DiscountBPS, &lineTotal,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan item: %w", err)
+		}
+		item.UnitPrice.Currency = inv.Currency
+		inv.Items = append(inv.Items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows err: %w", err)
+	}
+
+	return &inv, nil
+}
+
+// SaveTx persists an invoice within an existing transaction (from TxFromCtx).
+// Use this when the invoice save is part of a larger transaction.
+func (r *InvoiceRepository) SaveTx(ctx context.Context, invoice *entity.Invoice) error {
+	tx := port.TxFromCtx(ctx)
+	if tx == nil {
+		return errors.New("SaveTx requires a transaction in context")
+	}
+
+	err := r.saveInvoiceTx(ctx, tx, invoice)
+	if err != nil {
+		return err
+	}
+
+	// Save domain events to outbox (same transaction)
+	events := invoice.ClearEvents()
+	if len(events) > 0 {
+		if err := SaveEventsTx(ctx, tx, invoice.TenantID, events); err != nil {
+			return err
+		}
+	}
+
+	// Write audit entry
+	if err := r.saveAuditTx(ctx, tx, invoice); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // FindByNumber loads an invoice by tenant-scoped number.
 func (r *InvoiceRepository) FindByNumber(ctx context.Context, tenantID, number string) (*entity.Invoice, error) {
 	conn, err := r.db.TenantConn(ctx, tenantID)

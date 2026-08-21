@@ -112,4 +112,59 @@ func (r *PaymentRepository) FindByID(ctx context.Context, id string) (*entity.Pa
 	return &p, nil
 }
 
+// SaveTx saves a payment within an existing transaction (from TxFromCtx).
+func (r *PaymentRepository) SaveTx(ctx context.Context, payment *entity.Payment) error {
+	tx := port.TxFromCtx(ctx)
+	if tx == nil {
+		return errors.New("SaveTx requires a transaction in context")
+	}
+
+	_, err := tx.Exec(ctx, `
+		INSERT INTO payments (id, invoice_id, tenant_id, amount, currency, method, reference, paid_at, created_at)
+		VALUES (, , , , , , , , )
+	`,
+		payment.ID, payment.InvoiceID, payment.TenantID,
+		payment.Amount.Amount, payment.Amount.Currency,
+		payment.Method, payment.Reference, payment.PaidAt, payment.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("save payment tx: %w", err)
+	}
+
+	return nil
+}
+
+// FindByInvoiceTx loads payments for an invoice within an existing transaction.
+// Uses the transaction from TxFromCtx.
+func (r *PaymentRepository) FindByInvoiceTx(ctx context.Context, invoiceID string) ([]*entity.Payment, error) {
+	tx := port.TxFromCtx(ctx)
+	if tx == nil {
+		return nil, errors.New("FindByInvoiceTx requires a transaction in context")
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT id, invoice_id, tenant_id, amount, currency, method, reference, paid_at, created_at
+		FROM payments WHERE invoice_id =  ORDER BY paid_at ASC
+	`, invoiceID)
+	if err != nil {
+		return nil, fmt.Errorf("find payments tx: %w", err)
+	}
+	defer rows.Close()
+
+	var payments []*entity.Payment
+	for rows.Next() {
+		var p entity.Payment
+		err := rows.Scan(
+			&p.ID, &p.InvoiceID, &p.TenantID,
+			&p.Amount.Amount, &p.Amount.Currency,
+			&p.Method, &p.Reference, &p.PaidAt, &p.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan payment tx: %w", err)
+		}
+		payments = append(payments, &p)
+	}
+	return payments, rows.Err()
+}
+
 var _ port.PaymentRepository = (*PaymentRepository)(nil)

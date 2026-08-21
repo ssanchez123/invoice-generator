@@ -18,6 +18,15 @@ type InvoiceRepository interface {
 	// Returns ErrNotFound if the invoice doesn't exist.
 	FindByID(ctx context.Context, id string) (*entity.Invoice, error)
 
+	// FindByIDForUpdate loads an invoice and acquires a row lock (SELECT FOR UPDATE).
+	// Must be called within a transaction (use TxFromCtx to check).
+	// Returns ErrNotFound if the invoice doesn't exist.
+	FindByIDForUpdate(ctx context.Context, id string) (*entity.Invoice, error)
+
+	// SaveTx persists an invoice within an existing transaction (from TxFromCtx).
+	// Use this when you need to save the invoice as part of a larger transaction.
+	SaveTx(ctx context.Context, invoice *entity.Invoice) error
+
 	// FindByNumber loads an invoice by its tenant-scoped number.
 	FindByNumber(ctx context.Context, tenantID, number string) (*entity.Invoice, error)
 
@@ -48,6 +57,12 @@ type PaymentRepository interface {
 	Save(ctx context.Context, payment *entity.Payment) error
 	FindByInvoice(ctx context.Context, invoiceID string) ([]*entity.Payment, error)
 	FindByID(ctx context.Context, id string) (*entity.Payment, error)
+
+	// SaveTx saves a payment within an existing transaction (from TxFromCtx).
+	SaveTx(ctx context.Context, payment *entity.Payment) error
+
+	// FindByInvoiceTx loads payments for an invoice within an existing transaction.
+	FindByInvoiceTx(ctx context.Context, invoiceID string) ([]*entity.Payment, error)
 }
 
 // SubscriptionRepository is the port for subscription persistence.

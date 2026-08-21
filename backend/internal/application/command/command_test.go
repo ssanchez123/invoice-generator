@@ -2,6 +2,7 @@ package command_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -253,7 +254,7 @@ func TestRecordPayment(t *testing.T) {
 	})
 
 	// Record full payment
-	paymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo)
+	paymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo, repository.NewInMemoryUnitOfWork())
 	payment, err := paymentH.Handle(ctx, command.RecordPaymentCommand{
 		InvoiceID: invoice.ID,
 		TenantID:  tenantID,
@@ -305,7 +306,7 @@ func TestRecordPaymentExceedsTotal(t *testing.T) {
 		TenantID:  tenantID,
 	})
 
-	paymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo)
+	paymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo, repository.NewInMemoryUnitOfWork())
 	_, err := paymentH.Handle(ctx, command.RecordPaymentCommand{
 		InvoiceID: invoice.ID,
 		TenantID:  tenantID,
@@ -316,5 +317,240 @@ func TestRecordPaymentExceedsTotal(t *testing.T) {
 	})
 	if err != entity.ErrInsufficientPayment {
 		t.Errorf("expected ErrInsufficientPayment, got %v", err)
+	}
+}
+
+func TestRecordPaymentPartialThenFull(t *testing.T) {
+	tenantID := "tenant-001"
+
+	invoiceRepo := repository.NewInMemoryInvoiceRepository()
+	customerRepo := repository.NewInMemoryCustomerRepository()
+	paymentRepo := repository.NewInMemoryPaymentRepository()
+	uow := repository.NewInMemoryUnitOfWork()
+
+	customer := repository.NewTestCustomer(tenantID)
+	ctx := repository.WithTenantID(context.Background(), tenantID)
+	customerRepo.Save(ctx, customer)
+
+	// Create and issue invoice: $100.00 total
+	createH := command.NewCreateInvoiceHandler(invoiceRepo, customerRepo)
+	invoice, _ := createH.Handle(ctx, command.CreateInvoiceCommand{
+		TenantID:   tenantID,
+		CustomerID: customer.ID,
+		Currency:   "USD",
+		DueDate:    time.Now().Add(30 * 24 * time.Hour),
+		Items: []command.ItemInput{
+			{Description: "Test", Quantity: 1, UnitPrice: 10000, TaxRateBPS: 0},
+		},
+	})
+
+	issueH := command.NewIssueInvoiceHandler(invoiceRepo)
+	issueH.Handle(ctx, command.IssueInvoiceCommand{
+		InvoiceID: invoice.ID,
+		TenantID:  tenantID,
+	})
+
+	paymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo, uow)
+
+	// First partial payment: $60.00
+	p1, err := paymentH.Handle(ctx, command.RecordPaymentCommand{
+		InvoiceID: invoice.ID,
+		TenantID:  tenantID,
+		Amount:    6000,
+		Currency:  "USD",
+		Method:    "bank_transfer",
+		Reference: "TXN-001",
+		PaidAt:    time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("first partial payment failed: %v", err)
+	}
+	if p1.Amount.Amount != 6000 {
+		t.Errorf("first payment amount = %d, want 6000", p1.Amount.Amount)
+	}
+
+	// Invoice should NOT be paid yet
+	loaded, _ := invoiceRepo.FindByID(ctx, invoice.ID)
+	if loaded.Status != entity.InvoiceStatusIssued {
+		t.Errorf("after partial payment, status = %s, want issued", loaded.Status)
+	}
+
+	// Second payment: $40.00 (completes the total)
+	p2, err := paymentH.Handle(ctx, command.RecordPaymentCommand{
+		InvoiceID: invoice.ID,
+		TenantID:  tenantID,
+		Amount:    4000,
+		Currency:  "USD",
+		Method:    "bank_transfer",
+		Reference: "TXN-002",
+		PaidAt:    time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("second payment failed: %v", err)
+	}
+	if p2.Amount.Amount != 4000 {
+		t.Errorf("second payment amount = %d, want 4000", p2.Amount.Amount)
+	}
+
+	// Invoice should now be paid
+	loaded, _ = invoiceRepo.FindByID(ctx, invoice.ID)
+	if loaded.Status != entity.InvoiceStatusPaid {
+		t.Errorf("after full payment, status = %s, want paid", loaded.Status)
+	}
+}
+
+func TestRecordPaymentOverpaymentRejected(t *testing.T) {
+	tenantID := "tenant-001"
+
+	invoiceRepo := repository.NewInMemoryInvoiceRepository()
+	customerRepo := repository.NewInMemoryCustomerRepository()
+	paymentRepo := repository.NewInMemoryPaymentRepository()
+	uow := repository.NewInMemoryUnitOfWork()
+
+	customer := repository.NewTestCustomer(tenantID)
+	ctx := repository.WithTenantID(context.Background(), tenantID)
+	customerRepo.Save(ctx, customer)
+
+	// Create and issue invoice: $100.00 total
+	createH := command.NewCreateInvoiceHandler(invoiceRepo, customerRepo)
+	invoice, _ := createH.Handle(ctx, command.CreateInvoiceCommand{
+		TenantID:   tenantID,
+		CustomerID: customer.ID,
+		Currency:   "USD",
+		DueDate:    time.Now().Add(30 * 24 * time.Hour),
+		Items: []command.ItemInput{
+			{Description: "Test", Quantity: 1, UnitPrice: 10000, TaxRateBPS: 0},
+		},
+	})
+
+	issueH := command.NewIssueInvoiceHandler(invoiceRepo)
+	issueH.Handle(ctx, command.IssueInvoiceCommand{
+		InvoiceID: invoice.ID,
+		TenantID:  tenantID,
+	})
+
+	paymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo, uow)
+
+	// Pay $60.00
+	_, err := paymentH.Handle(ctx, command.RecordPaymentCommand{
+		InvoiceID: invoice.ID,
+		TenantID:  tenantID,
+		Amount:    6000,
+		Currency:  "USD",
+		Method:    "cash",
+		PaidAt:    time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("first payment failed: %v", err)
+	}
+
+	// Try to pay $50.00 more (60 + 50 = 110 > 100 total) — should be rejected
+	_, err = paymentH.Handle(ctx, command.RecordPaymentCommand{
+		InvoiceID: invoice.ID,
+		TenantID:  tenantID,
+		Amount:    5000,
+		Currency:  "USD",
+		Method:    "cash",
+		PaidAt:    time.Now(),
+	})
+	if err == nil {
+		t.Error("overpayment should be rejected")
+	}
+	if err != entity.ErrInsufficientPayment {
+		t.Errorf("expected ErrInsufficientPayment, got %v", err)
+	}
+}
+
+func TestRecordPaymentConcurrentSameInvoice(t *testing.T) {
+	tenantID := "tenant-001"
+
+	invoiceRepo := repository.NewInMemoryInvoiceRepository()
+	customerRepo := repository.NewInMemoryCustomerRepository()
+	paymentRepo := repository.NewInMemoryPaymentRepository()
+	uow := repository.NewInMemoryUnitOfWork()
+
+	customer := repository.NewTestCustomer(tenantID)
+	ctx := repository.WithTenantID(context.Background(), tenantID)
+	customerRepo.Save(ctx, customer)
+
+	// Create and issue invoice: $100.00 total
+	createH := command.NewCreateInvoiceHandler(invoiceRepo, customerRepo)
+	invoice, _ := createH.Handle(ctx, command.CreateInvoiceCommand{
+		TenantID:   tenantID,
+		CustomerID: customer.ID,
+		Currency:   "USD",
+		DueDate:    time.Now().Add(30 * 24 * time.Hour),
+		Items: []command.ItemInput{
+			{Description: "Test", Quantity: 1, UnitPrice: 10000, TaxRateBPS: 0},
+		},
+	})
+
+	issueH := command.NewIssueInvoiceHandler(invoiceRepo)
+	issueH.Handle(ctx, command.IssueInvoiceCommand{
+		InvoiceID: invoice.ID,
+		TenantID:  tenantID,
+	})
+
+	paymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo, uow)
+
+	// Launch 2 concurrent payments of $60.00 each.
+	// With the lock, only one should succeed. The second should be rejected
+	// because 60 + 60 = 120 > 100 (overpayment check).
+	var wg sync.WaitGroup
+	var err1, err2 error
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		_, err1 = paymentH.Handle(ctx, command.RecordPaymentCommand{
+			InvoiceID: invoice.ID,
+			TenantID:  tenantID,
+			Amount:    6000,
+			Currency:  "USD",
+			Method:    "bank_transfer",
+			Reference: "TXN-A",
+			PaidAt:    time.Now(),
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		_, err2 = paymentH.Handle(ctx, command.RecordPaymentCommand{
+			InvoiceID: invoice.ID,
+			TenantID:  tenantID,
+			Amount:    6000,
+			Currency:  "USD",
+			Method:    "cash",
+			Reference: "TXN-B",
+			PaidAt:    time.Now(),
+		})
+	}()
+
+	wg.Wait()
+
+	// Exactly one should succeed, the other should fail with overpayment
+	successCount := 0
+	if err1 == nil {
+		successCount++
+	}
+	if err2 == nil {
+		successCount++
+	}
+
+	if successCount != 1 {
+		t.Errorf("expected exactly 1 successful payment, got %d (err1=%v, err2=%v)", successCount, err1, err2)
+	}
+
+	// Verify final state: one payment recorded, invoice not overpaid
+	payments, _ := paymentRepo.FindByInvoice(ctx, invoice.ID)
+	totalPaid := int64(0)
+	for _, p := range payments {
+		totalPaid += p.Amount.Amount
+	}
+	if totalPaid != 6000 {
+		t.Errorf("total paid = %d, want 6000", totalPaid)
+	}
+	if totalPaid > 10000 {
+		t.Errorf("overpayment detected: total paid %d > invoice total 10000", totalPaid)
 	}
 }

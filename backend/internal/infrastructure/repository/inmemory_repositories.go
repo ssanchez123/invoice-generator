@@ -108,6 +108,16 @@ func (r *InMemoryInvoiceRepository) FindByTenant(ctx context.Context, tenantID s
 	return all[offset:end], total, nil
 }
 
+func (r *InMemoryInvoiceRepository) FindByIDForUpdate(ctx context.Context, id string) (*entity.Invoice, error) {
+	// In-memory: no real lock needed, just delegate to FindByID
+	return r.FindByID(ctx, id)
+}
+
+func (r *InMemoryInvoiceRepository) SaveTx(ctx context.Context, invoice *entity.Invoice) error {
+	// In-memory: no transaction, just delegate to Save
+	return r.Save(ctx, invoice)
+}
+
 func (r *InMemoryInvoiceRepository) FindOverdue(ctx context.Context, tenantID string, asOf time.Time) ([]*entity.Invoice, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -213,6 +223,16 @@ func (r *InMemoryPaymentRepository) FindByID(ctx context.Context, id string) (*e
 	}
 	clone := *p
 	return &clone, nil
+}
+
+// SaveTx saves a payment within an existing transaction (in-memory: same as Save).
+func (r *InMemoryPaymentRepository) SaveTx(ctx context.Context, payment *entity.Payment) error {
+	return r.Save(ctx, payment)
+}
+
+// FindByInvoiceTx loads payments for an invoice within an existing transaction (in-memory: same as FindByInvoice).
+func (r *InMemoryPaymentRepository) FindByInvoiceTx(ctx context.Context, invoiceID string) ([]*entity.Payment, error) {
+	return r.FindByInvoice(ctx, invoiceID)
 }
 
 // formatInvoiceNumber generates the invoice number string.

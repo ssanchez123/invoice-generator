@@ -56,7 +56,10 @@ func main() {
 	createInvoiceH := command.NewCreateInvoiceHandler(invoiceRepo, customerRepo)
 	issueInvoiceH := command.NewIssueInvoiceHandler(invoiceRepo)
 	cancelInvoiceH := command.NewCancelInvoiceHandler(invoiceRepo)
-	recordPaymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo)
+	// Unit of Work for transactional operations
+	uow := repository.NewUnitOfWork(db)
+
+	recordPaymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo, uow)
 
 	listInvoicesH := query.NewListInvoicesHandler(invoiceRepo)
 	getInvoiceH := query.NewGetInvoiceHandler(invoiceRepo)

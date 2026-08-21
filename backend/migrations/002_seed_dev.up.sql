@@ -30,3 +30,18 @@ VALUES (
     NOW()
 )
 ON CONFLICT (id) DO NOTHING;
+-- Seed admin user for development
+-- Email: admin@acme.com  Password: Password123!
+INSERT INTO users (id, tenant_id, email, role, password_hash, first_name, last_name, created_at, updated_at)
+VALUES (
+    '00000000-0000-0000-0000-000000000100',
+    '00000000-0000-0000-0000-000000000001',
+    'admin@acme.com',
+    'admin',
+    '$2a$10$98DhV48j.U7xXZI9yBQhTumJhjPGq/3Yzwmkbh0XlNDLtIdDQ93SS',
+    'Admin',
+    'User',
+    NOW(),
+    NOW()
+)
+ON CONFLICT (id) DO NOTHING;

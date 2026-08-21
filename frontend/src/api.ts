@@ -3,17 +3,72 @@
 
 const API_BASE = '/api/v1'
 
-// Tenant ID for dev — in production this comes from JWT.
-// We'll create a seed tenant in the DB with this ID.
-const TENANT_ID = '00000000-0000-0000-0000-000000000001'
+// ========== Token Management ==========
+
+const TOKEN_KEY = 'ig_access_token'
+const USER_KEY = 'ig_user'
+
+interface AuthUser {
+  id: string
+  tenant_id: string
+  email: string
+  role: string
+  first_name: string
+  last_name: string
+  full_name: string
+}
+
+interface LoginResponse {
+  access_token: string
+  token_type: string
+  expires_in: number
+  user: AuthUser
+}
+
+function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+function setToken(token: string, user: AuthUser): void {
+  localStorage.setItem(TOKEN_KEY, token)
+  localStorage.setItem(USER_KEY, JSON.stringify(user))
+}
+
+function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
+
+export function getStoredUser(): AuthUser | null {
+  const raw = localStorage.getItem(USER_KEY)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as AuthUser
+  } catch {
+    return null
+  }
+}
+
+export function isAuthenticated(): boolean {
+  return getToken() !== null
+}
+
+export function logout(): void {
+  clearToken()
+}
+
+// ========== HTTP Helpers ==========
 
 function headers(extra: Record<string, string> = {}): HeadersInit {
-  return {
+  const token = getToken()
+  const h: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-Tenant-ID': TENANT_ID,
-    'Authorization': 'Bearer dev-token',
     ...extra,
   }
+  if (token) {
+    h['Authorization'] = `Bearer ${token}`
+  }
+  return h
 }
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -21,6 +76,15 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     ...opts,
     headers: headers(opts.headers as Record<string, string>),
   })
+
+  // If token expired or invalid, clear it
+  if (res.status === 401) {
+    clearToken()
+    // Redirect to login if not already there
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+  }
 
   if (!res.ok) {
     let msg = `HTTP ${res.status}`
@@ -94,6 +158,29 @@ export interface Payment {
 // ========== API ==========
 
 export const api = {
+  // Auth
+  login: async (tenantId: string, email: string, password: string): Promise<LoginResponse> => {
+    const res = await request<LoginResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ tenant_id: tenantId, email, password }),
+    })
+    setToken(res.access_token, res.user)
+    return res
+  },
+
+  register: (body: {
+    tenant_id: string
+    email: string
+    password: string
+    role?: string
+    first_name?: string
+    last_name?: string
+  }) =>
+    request<{ id: string; tenant_id: string; email: string; role: string }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   // Invoices
   listInvoices: (params?: { status?: string; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams()

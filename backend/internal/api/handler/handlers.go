@@ -237,19 +237,145 @@ func customerToDTO(c *entity.Customer) customerDTO {
 	}
 }
 
-// ========== Auth (scaffolds) ==========
+// ========== Auth Handlers ==========
 
+// AuthDeps holds auth-specific dependencies injected via SetAuthDeps().
+type AuthDeps struct {
+	Register *commandHandler.RegisterHandler
+	Login    *commandHandler.LoginHandler
+}
+
+// authDeps is set by main.go via SetAuthDeps().
+var authDeps *AuthDeps
+
+func SetAuthDeps(d *AuthDeps) {
+	authDeps = d
+}
+
+// Login authenticates a user and returns a JWT token.
+// POST /api/v1/auth/login
 func Login(w http.ResponseWriter, r *http.Request) {
-	// POST /api/v1/auth/login
-	respondJSON(w, http.StatusOK, map[string]string{
-		"message": "login endpoint — scaffold",
+	var req struct {
+		TenantID string `json:"tenant_id"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	if err := parseBody(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.TenantID == "" {
+		respondError(w, http.StatusBadRequest, "tenant_id is required")
+		return
+	}
+	if req.Email == "" {
+		respondError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+	if req.Password == "" {
+		respondError(w, http.StatusBadRequest, "password is required")
+		return
+	}
+
+	cmd := commandHandler.LoginCommand{
+		TenantID: req.TenantID,
+		Email:    req.Email,
+		Password: req.Password,
+	}
+
+	result, err := authDeps.Login.Handle(r.Context(), cmd)
+	if err != nil {
+		if errors.Is(err, commandHandler.ErrInvalidCredentials) || errors.Is(err, commandHandler.ErrInvalidEmail) {
+			respondError(w, http.StatusUnauthorized, "invalid email or password")
+			return
+		}
+		status, msg := mapDomainError(err)
+		respondError(w, status, msg)
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"access_token": result.Token.AccessToken,
+		"token_type":   result.Token.TokenType,
+		"expires_in":   result.ExpiresIn,
+		"user": map[string]any{
+			"id":         result.User.ID,
+			"tenant_id":  result.User.TenantID,
+			"email":      result.User.Email,
+			"role":       string(result.User.Role),
+			"first_name": result.User.FirstName,
+			"last_name":  result.User.LastName,
+			"full_name":  result.User.FullName(),
+		},
 	})
 }
 
+// Register creates a new user within a tenant.
+// POST /api/v1/auth/register
 func Register(w http.ResponseWriter, r *http.Request) {
-	// POST /api/v1/auth/register
-	respondJSON(w, http.StatusCreated, map[string]string{
-		"message": "register endpoint — scaffold",
+	var req struct {
+		TenantID  string `json:"tenant_id"`
+		Email     string `json:"email"`
+		Password  string `json:"password"`
+		Role      string `json:"role"`
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+	}
+
+	if err := parseBody(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.TenantID == "" {
+		respondError(w, http.StatusBadRequest, "tenant_id is required")
+		return
+	}
+	if req.Email == "" {
+		respondError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+	if req.Password == "" {
+		respondError(w, http.StatusBadRequest, "password is required")
+		return
+	}
+
+	cmd := commandHandler.RegisterCommand{
+		TenantID:  req.TenantID,
+		Email:     req.Email,
+		Password:  req.Password,
+		Role:      req.Role,
+		FirstName: req.FirstName,
+		LastName:  req.LastName,
+	}
+
+	user, err := authDeps.Register.Handle(r.Context(), cmd)
+	if err != nil {
+		switch {
+		case errors.Is(err, commandHandler.ErrEmailAlreadyExists):
+			respondError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, commandHandler.ErrInvalidEmail),
+			errors.Is(err, commandHandler.ErrPasswordTooShort),
+			errors.Is(err, commandHandler.ErrInvalidRole),
+			errors.Is(err, commandHandler.ErrTenantNotFound):
+			respondError(w, http.StatusBadRequest, err.Error())
+		default:
+			status, msg := mapDomainError(err)
+			respondError(w, status, msg)
+		}
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, map[string]any{
+		"id":         user.ID,
+		"tenant_id":  user.TenantID,
+		"email":      user.Email,
+		"role":       string(user.Role),
+		"first_name": user.FirstName,
+		"last_name":  user.LastName,
+		"created_at": user.CreatedAt,
 	})
 }
 

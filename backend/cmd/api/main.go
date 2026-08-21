@@ -20,6 +20,7 @@ import (
 	"github.com/santiagossaa/invoice-generator/internal/application/command"
 	"github.com/santiagossaa/invoice-generator/internal/application/query"
 	"github.com/santiagossaa/invoice-generator/internal/config"
+	"github.com/santiagossaa/invoice-generator/internal/infrastructure/auth"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
 )
 
@@ -42,6 +43,14 @@ func main() {
 	invoiceRepo := repository.NewInvoiceRepository(db)
 	customerRepo := repository.NewCustomerRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	tenantRepo := repository.NewTenantRepository(db)
+
+	// Auth services
+	passwordHasher := auth.NewBcryptPasswordHasher()
+	tokenService := auth.NewJWTTokenService(auth.JWTConfig{
+		Secret: cfg.JWTSecret,
+	})
 
 	// Application layer handlers (CQRS)
 	createInvoiceH := command.NewCreateInvoiceHandler(invoiceRepo, customerRepo)
@@ -65,6 +74,15 @@ func main() {
 		ListCustomers: listCustomersH,
 		ListPayments:  listPaymentsH,
 		CustomerRepo:  customerRepo,
+	})
+
+	// Auth handlers
+	registerH := command.NewRegisterHandler(userRepo, passwordHasher, tenantRepo)
+	loginH := command.NewLoginHandler(userRepo, passwordHasher, tokenService)
+
+	handler.SetAuthDeps(&handler.AuthDeps{
+		Register: registerH,
+		Login:    loginH,
 	})
 
 	// ========== HTTP Server ==========
@@ -119,7 +137,7 @@ func main() {
 
 		// Protected routes
 		r.Group(func(r chi.Router) {
-			r.Use(apimiddleware.JWTAuth(cfg.JWTSecret))
+			r.Use(apimiddleware.JWTAuth(tokenService))
 
 			// Invoices
 			r.Post("/invoices", handler.CreateInvoice)

@@ -2,10 +2,12 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/santiagossaa/invoice-generator/internal/ctxkey"
+	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 )
 
 // contextKey is kept for backward compatibility with UserIDKey.
@@ -14,23 +16,80 @@ type contextKey string
 const (
 	TenantIDKey ctxkey.CtxKey = ctxkey.TenantIDKey
 	UserIDKey   contextKey    = "user_id"
+	UserRoleKey contextKey    = "user_role"
+	EmailKey    contextKey    = "email"
 )
 
-// TenantContext middleware extracts tenant_id from the JWT token
-// and sets it as a context value AND as a PostgreSQL session variable.
-// This enables Row-Level Security policies to enforce tenant isolation.
-func TenantContext(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// In a real implementation, this would extract tenant_id from the
-		// authenticated user's JWT token. For now, we check the header.
-		tenantID := r.Header.Get("X-Tenant-ID")
-		if tenantID == "" {
-			// For public endpoints (login, register), skip tenant context
+// JWTAuth middleware validates JWT tokens and extracts claims into the request context.
+// It sets tenant_id, user_id, role, and email in the context for downstream handlers.
+func JWTAuth(tokenService port.TokenService) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip auth for public endpoints
 			if isPublicPath(r.URL.Path) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			http.Error(w, `{"error":"tenant_id required"}`, http.StatusBadRequest)
+
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				writeAuthError(w, "authorization required", http.StatusUnauthorized)
+				return
+			}
+
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				writeAuthError(w, "invalid authorization header format, expected 'Bearer <token>'", http.StatusUnauthorized)
+				return
+			}
+
+			token := strings.TrimSpace(parts[1])
+			if token == "" {
+				writeAuthError(w, "empty token", http.StatusUnauthorized)
+				return
+			}
+
+			claims, err := tokenService.Validate(token)
+			if err != nil {
+				writeAuthError(w, err.Error(), http.StatusUnauthorized)
+				return
+			}
+
+			// Inject claims into context
+			ctx := r.Context()
+			ctx = context.WithValue(ctx, ctxkey.TenantIDKey, claims.TenantID)
+			ctx = context.WithValue(ctx, UserIDKey, claims.UserID)
+			ctx = context.WithValue(ctx, UserRoleKey, claims.Role)
+			ctx = context.WithValue(ctx, EmailKey, claims.Email)
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// TenantContext middleware ensures tenant_id is present in the context.
+// In the new auth flow, JWTAuth sets tenant_id from the JWT claims.
+// This middleware acts as a fallback: if JWTAuth didn't set tenant_id
+// (e.g., for public endpoints that still need it), it falls back to
+// the X-Tenant-ID header for backward compatibility during transition.
+func TenantContext(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if tenant_id was already set by JWTAuth
+		if _, ok := r.Context().Value(ctxkey.TenantIDKey).(string); ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Skip for public endpoints
+		if isPublicPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Fallback: check X-Tenant-ID header (backward compatibility / dev mode)
+		tenantID := r.Header.Get("X-Tenant-ID")
+		if tenantID == "" {
+			writeAuthError(w, "tenant_id required (provide via JWT token or X-Tenant-ID header)", http.StatusBadRequest)
 			return
 		}
 
@@ -39,26 +98,27 @@ func TenantContext(next http.Handler) http.Handler {
 	})
 }
 
-// JWTAuth middleware validates JWT tokens and extracts claims.
-func JWTAuth(secret string) func(next http.Handler) http.Handler {
+// RequireRole returns a middleware that checks if the user has the required role.
+// Must be used after JWTAuth.
+func RequireRole(role string) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				http.Error(w, `{"error":"authorization required"}`, http.StatusUnauthorized)
+			userRole, ok := r.Context().Value(UserRoleKey).(string)
+			if !ok {
+				writeAuthError(w, "authentication required", http.StatusUnauthorized)
 				return
 			}
 
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || parts[0] != "Bearer" {
-				http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
+			// Admin has access to everything
+			if userRole == "admin" {
+				next.ServeHTTP(w, r)
 				return
 			}
 
-			// In a real implementation, validate JWT and extract claims
-			// token := parts[1]
-			// claims, err := jwt.Parse(token, ...)
-			// For scaffold, we pass through
+			if userRole != role {
+				writeAuthError(w, "insufficient permissions", http.StatusForbidden)
+				return
+			}
 
 			next.ServeHTTP(w, r)
 		})
@@ -89,6 +149,13 @@ func Idempotency(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// writeAuthError writes a JSON error response for auth failures.
+func writeAuthError(w http.ResponseWriter, msg string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
 func isPublicPath(path string) bool {

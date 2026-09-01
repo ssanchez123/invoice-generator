@@ -1,4 +1,4 @@
--- Migration 003: Add auth-related columns to users table
+-- Migration 002: Add auth-related columns to users table
 -- The users table already has: id, tenant_id, email, role, password_hash, created_at
 -- We add first_name and last_name for display purposes and ensure password_hash is NOT NULL.
 

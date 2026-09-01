@@ -1,5 +1,6 @@
--- Seed data for development: one tenant and one customer.
+-- Seed data for development: one tenant, one customer, and one admin user.
 -- Run after migrations.
+-- NOTE: must run AFTER 002_auth_columns (seeded user uses first_name/last_name).
 
 -- Temporarily bypass RLS for seeding
 SET LOCAL row_security = off;

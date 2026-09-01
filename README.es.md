@@ -7,7 +7,7 @@
 Demostrando arquitectura hexagonal, CQRS, multi-tenancy con Row-Level Security
 y el patrón transactional outbox.
 
-[![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
@@ -54,7 +54,7 @@ El enfoque está en **ingeniería de backend**: modelado de dominio, separación
 ### Docker Compose (recomendado)
 
 ```bash
-git clone https://github.com/santiagossaa/invoice-generator.git
+git clone https://github.com/ssanchez123/invoice-generator.git
 cd invoice-generator
 docker compose -f deploy/docker/docker-compose.yml up -d
 ```
@@ -127,7 +127,7 @@ Ver [LOCAL_SETUP.md](LOCAL_SETUP.md) para instrucciones detalladas de desarrollo
 
 | Componente | Tecnología |
 |-----------|-----------|
-| Backend | Go 1.22+ · chi v5 · pgx/v5 |
+| Backend | Go 1.25+ · chi v5 · pgx/v5 |
 | Frontend | React 18 · Vite · TypeScript |
 | Base de datos | PostgreSQL 16 |
 | Servicio PDF | Go (microservicio separado) |
@@ -237,6 +237,7 @@ curl -X POST \
 | **Unit** | Capa de dominio (value objects, entidades, state machine) | `go test ./internal/domain/...` |
 | **Integración** | Capa de aplicación con repos en memoria | `go test ./internal/application/...` |
 | **E2E** | Handlers HTTP con `httptest` | `go test ./internal/api/...` |
+| **DB Integration** | Repositorios contra PostgreSQL real (locking, RLS, secuencias) | `make test-integration` |
 | **Config** | Carga de configuración | `go test ./internal/config/...` |
 
 ```bash

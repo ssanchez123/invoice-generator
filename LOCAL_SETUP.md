@@ -24,7 +24,7 @@ Instrucciones paso a paso para levantar todo el proyecto en local: PostgreSQL, m
 |-------------|---------------|----------------|
 | **Docker** | 24+ | Contenedor de PostgreSQL y builds |
 | **Docker Compose** | v2+ | Orquestación de servicios |
-| **Go** | 1.22+ | Compilar y correr el backend |
+| **Go** | 1.25+ | Compilar y correr el backend |
 | **Node.js** | 20+ | Compilar y correr el frontend |
 | **npm** | 10+ | Gestión de dependencias del frontend |
 | **golang-migrate** | opcional | Correr migraciones manualmente (ver nota abajo) |

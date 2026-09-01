@@ -40,7 +40,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: invoicegen
-      DB_USER: invoicegen
+      DB_USER: invoicegen_app
       DB_PASSWORD: invoicegen_dev
       JWT_SECRET: dev-secret-change-in-production
       JWT_EXPIRY: 24h
@@ -62,7 +62,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: invoicegen
-      DB_USER: invoicegen
+      DB_USER: invoicegen_app
       DB_PASSWORD: invoicegen_dev
     depends_on:
       postgres:
@@ -79,7 +79,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: invoicegen
-      DB_USER: invoicegen
+      DB_USER: invoicegen_app
       DB_PASSWORD: invoicegen_dev
       PDF_STORAGE_PATH: /var/pdfs
     volumes:

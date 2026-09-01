@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +32,22 @@ func NewDB(ctx context.Context, databaseURL string) (*DB, error) {
 	cfg.MinConns = 5
 	cfg.MaxConnLifetime = 0 // let pool manage
 	cfg.MaxConnIdleTime = 0
+
+	// Reset the tenant session variable on every release so a pooled
+	// connection never carries the previous request's tenant context
+	// (TenantConn uses session-scoped set_config; without this reset,
+	// a connection reused without TenantConn/TenantTx would inherit
+	// the last tenant — a latent cross-tenant leak).
+	// An empty value makes RLS policies fail closed: casting '' to UUID
+	// errors, so a dirty connection cannot silently read another tenant.
+	// The reset doubles as a health check: a broken connection is
+	// discarded instead of being returned to the pool.
+	cfg.AfterRelease = func(conn *pgx.Conn) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, err := conn.Exec(ctx, "SELECT set_config('app.tenant_id', '', false)")
+		return err == nil
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

@@ -199,7 +199,7 @@ func (r *InvoiceRepository) FindByIDForUpdate(ctx context.Context, id string) (*
 	err := tx.QueryRow(ctx, `
 		SELECT id, tenant_id, customer_id, number, status, issue_date, due_date,
 		       currency, subtotal, tax_total, total, notes, metadata, created_at, updated_at
-		FROM invoices WHERE id =  AND deleted_at IS NULL
+		FROM invoices WHERE id = $1 AND deleted_at IS NULL
 		FOR UPDATE
 	`, id).Scan(
 		&inv.ID, &inv.TenantID, &inv.CustomerID, &number,
@@ -226,7 +226,7 @@ func (r *InvoiceRepository) FindByIDForUpdate(ctx context.Context, id string) (*
 	// Load items (no lock needed — items are only modified via the aggregate)
 	rows, err := tx.Query(ctx, `
 		SELECT id, description, quantity, unit_price, tax_rate_bps, discount_bps, total
-		FROM invoice_items WHERE invoice_id = 
+		FROM invoice_items WHERE invoice_id = $1
 	`, id)
 	if err != nil {
 		return nil, fmt.Errorf("load items for update: %w", err)

@@ -121,7 +121,7 @@ func (r *PaymentRepository) SaveTx(ctx context.Context, payment *entity.Payment)
 
 	_, err := tx.Exec(ctx, `
 		INSERT INTO payments (id, invoice_id, tenant_id, amount, currency, method, reference, paid_at, created_at)
-		VALUES (, , , , , , , , )
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`,
 		payment.ID, payment.InvoiceID, payment.TenantID,
 		payment.Amount.Amount, payment.Amount.Currency,
@@ -144,7 +144,7 @@ func (r *PaymentRepository) FindByInvoiceTx(ctx context.Context, invoiceID strin
 
 	rows, err := tx.Query(ctx, `
 		SELECT id, invoice_id, tenant_id, amount, currency, method, reference, paid_at, created_at
-		FROM payments WHERE invoice_id =  ORDER BY paid_at ASC
+		FROM payments WHERE invoice_id = $1 ORDER BY paid_at ASC
 	`, invoiceID)
 	if err != nil {
 		return nil, fmt.Errorf("find payments tx: %w", err)

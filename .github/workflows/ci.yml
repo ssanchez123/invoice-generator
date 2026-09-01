@@ -35,7 +35,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
           cache-dependency-path: backend/go.sum
 
@@ -55,6 +55,20 @@ jobs:
 
       - name: Test
         run: go test ./... -v -coverprofile=coverage.out
+
+      - name: Create integration test database
+        env:
+          PGPASSWORD: invoicegen_dev
+        run: psql -h localhost -U invoicegen -d invoicegen -c "CREATE DATABASE invoicegen_test"
+
+      - name: Integration tests
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: invoicegen_test
+          DB_USER: invoicegen
+          DB_PASSWORD: invoicegen_dev
+        run: go test -tags=integration -v -count=1 -timeout=300s ./internal/infrastructure/repository/integration/...
 
       - name: Upload coverage
         uses: actions/upload-artifact@v4
@@ -97,7 +111,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
           cache: true
           cache-dependency-path: backend/go.sum
 

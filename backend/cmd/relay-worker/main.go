@@ -10,23 +10,26 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/santiagossaa/invoice-generator/internal/application/outbox"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
 )
+
+const deliveryLeaseDuration = 5 * time.Minute
 
 // EventDispatcher routes outbox events to their handlers.
 type EventHandler interface {
 	Handle(ctx context.Context, eventType string, payload []byte) error
 }
 
-// RelayWorker polls the outbox table for unprocessed domain events
-// and dispatches them to event handlers (PDF generation, audit logging, etc.)
+// RelayWorker handles its own outbox deliveries (audit logging, notifications, etc.).
 //
 // Outbox Pattern (ADR-006):
 // 1. Domain events written to outbox in same TX as aggregate changes
-// 2. This worker polls for unprocessed entries using SELECT FOR UPDATE SKIP LOCKED
-// 3. For each entry, routes to the appropriate handler
-// 4. On success, marks entry as processed
-// 5. Multiple worker instances run safely (SKIP LOCKED prevents duplicate processing)
+// 2. Each consumer receives an independent delivery row
+// 3. This worker claims tenant-scoped deliveries using leases and SKIP LOCKED
+// 4. Failed handlers retry with backoff; expired leases are reclaimed
 func main() {
 	log.Println("relay-worker starting...")
 
@@ -38,10 +41,11 @@ func main() {
 	defer db.Close()
 
 	outboxRepo := repository.NewOutboxRepository(db)
+	workerID := uuid.NewString()
 
 	// Register event handlers
 	handlers := map[string]EventHandler{
-		"invoice.issued":       &InvoiceIssuedHandler{db: db},
+		"invoice.issued":       &InvoiceIssuedHandler{},
 		"invoice.paid":         &InvoicePaidHandler{},
 		"payment.recorded":     &PaymentRecordedHandler{},
 		"pdf.generated":        &PDFGeneratedHandler{},
@@ -71,40 +75,49 @@ func main() {
 			log.Println("relay-worker stopped")
 			return
 		case <-ticker.C:
-			if err := processBatch(ctx, outboxRepo, handlers); err != nil {
+			if err := processBatch(ctx, outboxRepo, handlers, workerID); err != nil {
 				log.Printf("outbox processing error: %v", err)
 			}
 		}
 	}
 }
 
-func processBatch(ctx context.Context, outboxRepo *repository.OutboxRepository, handlers map[string]EventHandler) error {
-	entries, err := outboxRepo.FindUnprocessed(ctx, 50)
+func processBatch(ctx context.Context, outboxRepo *repository.OutboxRepository, handlers map[string]EventHandler, workerID string) error {
+	tenantIDs, err := outboxRepo.ListTenantIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("find unprocessed: %w", err)
+		return fmt.Errorf("list tenants: %w", err)
 	}
 
-	if len(entries) == 0 {
-		return nil
-	}
+	for _, tenantID := range tenantIDs {
+		for i := 0; i < 50; i++ {
+			entries, err := outboxRepo.ClaimDeliveries(ctx, tenantID, "relay-worker", workerID, 1, deliveryLeaseDuration)
+			if err != nil {
+				return fmt.Errorf("claim relay deliveries for tenant %s: %w", tenantID, err)
+			}
+			if len(entries) == 0 {
+				break
+			}
 
-	log.Printf("processing %d outbox entries...", len(entries))
+			entry := entries[0]
+			handler, ok := handlers[entry.EventType]
+			if !ok {
+				err = fmt.Errorf("no relay handler for event type %s", entry.EventType)
+			} else {
+				err = outbox.ProcessWithLease(ctx, outboxRepo, tenantID, entry.ID, "relay-worker", workerID, deliveryLeaseDuration, func(handlerCtx context.Context) error {
+					return handler.Handle(handlerCtx, entry.EventType, entry.Payload)
+				})
+			}
+			if err != nil {
+				log.Printf("handler error for %s (entry %s, attempt %d): %v", entry.EventType, entry.ID, entry.Attempts, err)
+				if retryErr := outboxRepo.RetryDelivery(ctx, tenantID, entry.ID, "relay-worker", workerID, err); retryErr != nil {
+					log.Printf("failed to release relay delivery %s: %v", entry.ID, retryErr)
+				}
+				continue
+			}
 
-	for _, entry := range entries {
-		handler, ok := handlers[entry.EventType]
-		if !ok {
-			log.Printf("no handler for event type %s, marking as processed", entry.EventType)
-			outboxRepo.MarkProcessed(ctx, entry.ID)
-			continue
-		}
-
-		if err := handler.Handle(ctx, entry.EventType, entry.Payload); err != nil {
-			log.Printf("handler error for %s (entry %s): %v — will retry", entry.EventType, entry.ID, err)
-			continue // Don't mark as processed — will retry next cycle
-		}
-
-		if err := outboxRepo.MarkProcessed(ctx, entry.ID); err != nil {
-			log.Printf("failed to mark outbox entry %s as processed: %v", entry.ID, err)
+			if err := outboxRepo.CompleteDelivery(ctx, tenantID, entry.ID, "relay-worker", workerID); err != nil {
+				log.Printf("failed to complete relay delivery %s: %v", entry.ID, err)
+			}
 		}
 	}
 
@@ -113,10 +126,8 @@ func processBatch(ctx context.Context, outboxRepo *repository.OutboxRepository, 
 
 // ========== Event Handlers ==========
 
-// InvoiceIssuedHandler triggers PDF generation when an invoice is issued.
-type InvoiceIssuedHandler struct {
-	db *repository.DB
-}
+// InvoiceIssuedHandler records the issue event independently of PDF generation.
+type InvoiceIssuedHandler struct{}
 
 func (h *InvoiceIssuedHandler) Handle(ctx context.Context, eventType string, payload []byte) error {
 	var event struct {
@@ -128,14 +139,7 @@ func (h *InvoiceIssuedHandler) Handle(ctx context.Context, eventType string, pay
 		return fmt.Errorf("unmarshal invoice.issued: %w", err)
 	}
 
-	log.Printf("invoice.issued: invoice=%s tenant=%s — triggering PDF generation", event.InvoiceID, event.TenantID)
-
-	// In a real implementation:
-	// 1. Load invoice from DB
-	// 2. Call PDF service (HTTP or direct function call)
-	// 3. Store artifact and emit PDFGenerated event
-	// For now, we log it
-
+	log.Printf("invoice.issued: invoice=%s tenant=%s", event.InvoiceID, event.TenantID)
 	return nil
 }
 

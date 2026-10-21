@@ -135,12 +135,15 @@ sequenceDiagram
 
     rect rgb(255, 255, 240)
         Note over Relay, DB: Async processing (every 2s)
-        Relay->>DB: SELECT FROM outbox WHERE status='pending'<br/>FOR UPDATE SKIP LOCKED
-        DB-->>Relay: invoice.issued event
-        Relay->>PDF: Generate PDF for invoice
+        Relay->>DB: Claim relay-worker delivery with tenant-scoped lease
+        DB-->>Relay: invoice.issued delivery
+        PDF->>DB: Claim pdf-service delivery independently
+        DB-->>PDF: invoice.issued delivery
         PDF->>PDF: Render HTML template
         PDF->>DB: INSERT INTO outbox (event_type='pdf.generated')
-        Relay->>DB: UPDATE outbox SET status='processed'
+        PDF->>DB: Complete its delivery
+        Relay->>DB: Complete its delivery
+        Note over Relay, DB: Event is processed after every subscribed delivery completes
     end
 ```
 

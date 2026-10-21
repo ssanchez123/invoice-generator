@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,9 +19,10 @@ import (
 
 // TestDB holds the PostgreSQL connection pool and helpers.
 type TestDB struct {
-	Pool     *pgxpool.Pool
-	DB       *repository.DB
-	TenantID string
+	Pool       *pgxpool.Pool
+	DB         *repository.DB
+	OperatorDB *repository.DB
+	TenantID   string
 }
 
 // SetupTestDB connects to a PostgreSQL instance (from env vars or testcontainers),
@@ -67,6 +69,7 @@ func SetupTestDB(t *testing.T) *TestDB {
 	// will connect as. Mirrors deploy/docker/init-db.sql (ADR-004: RLS only
 	// applies to non-superusers). Idempotent: safe to run on reused databases.
 	ensureAppRole(t, ctx, pool, dbPass)
+	ensureOperatorRole(t, ctx, pool)
 
 	// Run migrations
 	migrationsDir := findMigrationsDir(t)
@@ -83,11 +86,17 @@ func SetupTestDB(t *testing.T) *TestDB {
 	if err != nil {
 		t.Fatalf("failed to create DB wrapper: %v", err)
 	}
+	operatorConnStr := fmt.Sprintf("postgres://invoicegen_ops_test:%s@%s:%s/%s?sslmode=disable", "operator-test-password", dbHost, dbPort, dbName)
+	operatorDB, err := repository.NewDB(ctx, operatorConnStr)
+	if err != nil {
+		t.Fatalf("failed to create operator DB wrapper: %v", err)
+	}
 
 	testDB := &TestDB{
-		Pool:     pool,
-		DB:       db,
-		TenantID: TestTenantID,
+		Pool:       pool,
+		DB:         db,
+		OperatorDB: operatorDB,
+		TenantID:   TestTenantID,
 	}
 
 	// Start every test from a clean slate: tests use fixed primary keys and
@@ -107,6 +116,9 @@ func SetupTestDB(t *testing.T) *TestDB {
 func (tdb *TestDB) Cleanup() {
 	if tdb.DB != nil {
 		tdb.DB.Close()
+	}
+	if tdb.OperatorDB != nil {
+		tdb.OperatorDB.Close()
 	}
 	if tdb.Pool != nil {
 		tdb.Pool.Close()
@@ -138,6 +150,16 @@ func ensureAppRole(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passw
 		// Objects that already exist (reused databases)
 		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO invoicegen_app`,
 		`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO invoicegen_app`,
+		// Consumer routing is migration-managed; the runtime role is read-only.
+		`DO $$ BEGIN
+			IF to_regclass('public.outbox_subscriptions') IS NOT NULL THEN
+				EXECUTE 'REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON outbox_subscriptions FROM invoicegen_app';
+				EXECUTE 'GRANT SELECT ON outbox_subscriptions TO invoicegen_app';
+			END IF;
+			IF to_regclass('public.outbox_delivery_replays') IS NOT NULL THEN
+				EXECUTE 'REVOKE ALL ON outbox_delivery_replays FROM invoicegen_app';
+			END IF;
+		END $$`,
 	}
 	for _, g := range grants {
 		if _, err := admin.Exec(ctx, g); err != nil {
@@ -146,12 +168,35 @@ func ensureAppRole(t *testing.T, ctx context.Context, admin *pgxpool.Pool, passw
 	}
 }
 
+func ensureOperatorRole(t *testing.T, ctx context.Context, admin *pgxpool.Pool) {
+	t.Helper()
+	if _, err := admin.Exec(ctx, `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'invoicegen_operator') THEN
+				CREATE ROLE invoicegen_operator NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+			END IF;
+			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'invoicegen_ops_test') THEN
+				CREATE ROLE invoicegen_ops_test LOGIN PASSWORD 'operator-test-password' NOSUPERUSER;
+			ELSE
+				ALTER ROLE invoicegen_ops_test WITH LOGIN NOSUPERUSER PASSWORD 'operator-test-password';
+			END IF;
+			EXECUTE 'GRANT invoicegen_operator TO invoicegen_ops_test';
+			EXECUTE 'GRANT CONNECT ON DATABASE ' || quote_ident(current_database()) || ' TO invoicegen_operator';
+			EXECUTE 'GRANT USAGE ON SCHEMA public TO invoicegen_operator';
+		END
+		$$;
+	`); err != nil {
+		t.Fatalf("create operator role: %v", err)
+	}
+}
+
 // ResetDB truncates all tables for test isolation. Call between tests if needed.
 func (tdb *TestDB) ResetDB(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	tables := []string{
-		"payments", "invoice_items", "invoices", "invoice_sequences",
+		"outbox_delivery_replays", "payments", "invoice_items", "invoices", "invoice_sequences",
 		"users", "customers", "tenants", "outbox", "audit_entries",
 	}
 	for _, tbl := range tables {
@@ -206,7 +251,7 @@ func runMigrations(t *testing.T, ctx context.Context, pool *pgxpool.Pool, migrat
 	}
 	sort.Strings(files)
 	for _, file := range files {
-		version := filepath.Base(file)
+		version := strings.TrimSuffix(filepath.Base(file), ".up.sql")
 		var applied bool
 		pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", version).Scan(&applied)
 		if applied {

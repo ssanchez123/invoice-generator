@@ -10,6 +10,8 @@ services:
       POSTGRES_DB: invoicegen_test
       POSTGRES_USER: testuser
       POSTGRES_PASSWORD: testpass
+    volumes:
+      - ./init-db-test.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     ports:
       - "15432:5432"
     healthcheck:
@@ -51,5 +53,5 @@ services:
         condition: service_healthy
       migrate-test:
         condition: service_completed_successfully
-    command: ["go", "test", "-tags=integration", "-v", "-count=1", "-timeout=300s", "./internal/infrastructure/repository/integration/..."]
+    command: ["go", "test", "-tags=integration", "-v", "-count=1", "-timeout=300s", "./internal/infrastructure/repository/integration/...", "./internal/infrastructure/storage/..."]
     restart: "no"

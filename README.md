@@ -76,7 +76,7 @@ That's it. Six services come up:
 curl http://localhost:8080/healthz
 
 # List invoices (dev tenant)
-curl -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
+curl \
      -H "Authorization: Bearer dev-token" \
      http://localhost:8080/api/v1/invoices
 
@@ -184,8 +184,8 @@ invoice-generator/
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/v1/auth/register` | Register new tenant (scaffold) |
-| `POST` | `/api/v1/auth/login` | Login (scaffold) |
+| `POST` | `/api/v1/auth/register` | Public registration disabled (403) |
+| `POST` | `/api/v1/auth/login` | Login |
 | `POST` | `/api/v1/invoices` | Create invoice (idempotent) |
 | `GET` | `/api/v1/invoices` | List invoices (paginated, filterable) |
 | `GET` | `/api/v1/invoices/:id` | Get invoice detail |
@@ -209,11 +209,8 @@ Full specification: [docs/openapi.yaml](docs/openapi.yaml)
 ### Authentication
 
 ```bash
-# All protected endpoints require:
-# - Authorization: Bearer <token>
-# - X-Tenant-ID: <tenant-uuid>
+# Protected endpoints require a JWT; the tenant is read from its verified claims.
 curl -H "Authorization: Bearer <token>" \
-     -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
      http://localhost:8080/api/v1/invoices
 ```
 
@@ -223,7 +220,6 @@ curl -H "Authorization: Bearer <token>" \
 # POST endpoints accept Idempotency-Key for safe retries
 curl -X POST \
      -H "Idempotency-Key: $(uuidgen)" \
-     -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
      -H "Authorization: Bearer dev-token" \
      -H "Content-Type: application/json" \
      -d '{"customer_id":"...", "currency":"USD", "due_date":"...", "items":[...]}' \

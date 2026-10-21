@@ -1,25 +1,31 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/santiagossaa/invoice-generator/internal/application/outbox"
+	pdfapp "github.com/santiagossaa/invoice-generator/internal/application/pdf"
 	"github.com/santiagossaa/invoice-generator/internal/domain/entity"
 	"github.com/santiagossaa/invoice-generator/internal/domain/port"
+	pdfrenderer "github.com/santiagossaa/invoice-generator/internal/infrastructure/pdf"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
+	"github.com/santiagossaa/invoice-generator/internal/infrastructure/storage"
 )
+
+const deliveryLeaseDuration = 5 * time.Minute
 
 // PDFService generates invoice PDFs as a separate service (ADR-007).
 //
-// It polls for "invoice.issued" events from the outbox and generates PDFs.
+// It polls its independent "invoice.issued" deliveries and generates artifacts.
 // The PDF is rendered from an HTML template and stored on disk (S3-compatible in prod).
 //
 // Why separate service:
@@ -29,14 +35,6 @@ import (
 func main() {
 	log.Println("pdf-service starting...")
 
-	storagePath := os.Getenv("PDF_STORAGE_PATH")
-	if storagePath == "" {
-		storagePath = "/tmp/pdfs"
-	}
-	if err := os.MkdirAll(storagePath, 0755); err != nil {
-		log.Fatalf("failed to create storage dir %s: %v", storagePath, err)
-	}
-
 	dbURL := repository.DatabaseURL()
 	db, err := repository.NewDB(context.Background(), dbURL)
 	if err != nil {
@@ -44,13 +42,23 @@ func main() {
 	}
 	defer db.Close()
 
+	pdfStore, err := storage.NewPDFArtifactStoreFromEnv(context.Background())
+	if err != nil {
+		log.Fatalf("failed to configure PDF storage: %v", err)
+	}
+	pdfGenerator := pdfapp.NewGenerator(
+		repository.NewInvoiceRepository(db),
+		repository.NewCustomerRepository(db),
+		repository.NewTenantRepository(db),
+		pdfrenderer.NewGoFPDFRenderer(),
+		pdfStore,
+	)
 	outboxRepo := repository.NewOutboxRepository(db)
 
 	srv := &PDFService{
-		storagePath: storagePath,
-		db:          db,
-		outboxRepo:  outboxRepo,
-		templates:   template.Must(template.New("invoice").Parse(invoiceHTMLTemplate)),
+		generator:  pdfGenerator,
+		outboxRepo: outboxRepo,
+		workerID:   uuid.NewString(),
 	}
 
 	ticker := time.NewTicker(3 * time.Second)
@@ -68,7 +76,7 @@ func main() {
 		cancel()
 	}()
 
-	log.Printf("pdf-service polling every 3s, storage: %s", storagePath)
+	log.Println("pdf-service polling every 3s")
 
 	for {
 		select {
@@ -85,148 +93,90 @@ func main() {
 
 // PDFService handles PDF generation.
 type PDFService struct {
-	storagePath string
-	db          *repository.DB
-	outboxRepo  *repository.OutboxRepository
-	templates   *template.Template
+	generator  *pdfapp.Generator
+	outboxRepo *repository.OutboxRepository
+	workerID   string
 }
 
 func (s *PDFService) processJobs(ctx context.Context) error {
-	// Find outbox entries for "invoice.issued" events
-	entries, err := s.outboxRepo.FindUnprocessed(ctx, 20)
+	tenantIDs, err := s.outboxRepo.ListTenantIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("find unprocessed: %w", err)
+		return fmt.Errorf("list tenants: %w", err)
 	}
 
-	for _, entry := range entries {
-		if entry.EventType != "invoice.issued" {
-			continue
-		}
+	for _, tenantID := range tenantIDs {
+		for i := 0; i < 20; i++ {
+			entries, err := s.outboxRepo.ClaimDeliveries(ctx, tenantID, "pdf-service", s.workerID, 1, deliveryLeaseDuration)
+			if err != nil {
+				return fmt.Errorf("claim PDF deliveries for tenant %s: %w", tenantID, err)
+			}
+			if len(entries) == 0 {
+				break
+			}
 
-		if err := s.generateInvoicePDF(ctx, entry); err != nil {
-			log.Printf("pdf generation failed for %s: %v", entry.AggregateID, err)
-			continue // Will retry next cycle
-		}
+			entry := entries[0]
+			err = outbox.ProcessWithLease(ctx, s.outboxRepo, tenantID, entry.ID, "pdf-service", s.workerID, deliveryLeaseDuration, func(handlerCtx context.Context) error {
+				return s.generateInvoicePDF(handlerCtx, entry)
+			})
+			if err != nil {
+				log.Printf("pdf generation failed for %s (attempt %d): %v", entry.AggregateID, entry.Attempts, err)
+				if retryErr := s.outboxRepo.RetryDelivery(ctx, tenantID, entry.ID, "pdf-service", s.workerID, err); retryErr != nil {
+					log.Printf("failed to release PDF delivery %s: %v", entry.ID, retryErr)
+				}
+				continue
+			}
 
-		s.outboxRepo.MarkProcessed(ctx, entry.ID)
+			if err := s.outboxRepo.CompleteDelivery(ctx, tenantID, entry.ID, "pdf-service", s.workerID); err != nil {
+				log.Printf("failed to complete PDF delivery %s: %v", entry.ID, err)
+			}
+		}
 	}
 
 	return nil
 }
 
 func (s *PDFService) generateInvoicePDF(ctx context.Context, entry port.OutboxEntry) error {
-	var event struct {
-		InvoiceID string    `json:"InvoiceID"`
-		TenantID  string    `json:"TenantID"`
-		IssuedAt  time.Time `json:"IssuedAt"`
-	}
-	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		return fmt.Errorf("unmarshal event: %w", err)
+	if err := s.generator.Generate(ctx, entry.TenantID, entry.AggregateID); err != nil {
+		return fmt.Errorf("generate invoice PDF: %w", err)
 	}
 
-	// In a real implementation:
-	// 1. Load invoice + customer + tenant from DB
-	// 2. Build the invoice data model for the template
-	// 3. Render HTML template
-	// 4. Convert HTML to PDF (using wkhtmltopdf, chromedp, or go-pdf)
-	// 5. Store artifact: {storagePath}/{tenantID}/{invoiceID}.pdf
-	// 6. Emit PDFGenerated event back to outbox
-
-	// For scaffold: render a simple HTML template
-	var buf bytes.Buffer
-	data := map[string]any{
-		"InvoiceID": event.InvoiceID,
-		"TenantID":  event.TenantID,
-		"IssuedAt":  event.IssuedAt.Format("2006-01-02"),
-	}
-
-	if err := s.templates.Execute(&buf, data); err != nil {
-		return fmt.Errorf("render template: %w", err)
-	}
-
-	// Save HTML as placeholder (real impl would convert to PDF)
-	tenantDir := fmt.Sprintf("%s/%s", s.storagePath, event.TenantID)
-	if err := os.MkdirAll(tenantDir, 0755); err != nil {
-		return fmt.Errorf("create tenant dir: %w", err)
-	}
-
-	filePath := fmt.Sprintf("%s/%s.html", tenantDir, event.InvoiceID)
-	if err := os.WriteFile(filePath, buf.Bytes(), 0644); err != nil {
-		return fmt.Errorf("write file: %w", err)
-	}
-
-	artifactURL := fmt.Sprintf("/pdfs/%s/%s.pdf", event.TenantID, event.InvoiceID)
-	log.Printf("PDF generated: invoice=%s → %s", event.InvoiceID, filePath)
+	artifactURL := fmt.Sprintf("/api/v1/invoices/%s/pdf", entry.AggregateID)
+	log.Printf("PDF generated: invoice=%s tenant=%s", entry.AggregateID, entry.TenantID)
 
 	// Emit PDFGenerated event
-	pdfEvent := struct {
-		InvoiceID   string    `json:"InvoiceID"`
-		TenantID    string    `json:"TenantID"`
-		ArtifactURL string    `json:"ArtifactURL"`
-		GeneratedAt time.Time `json:"GeneratedAt"`
-	}{
-		InvoiceID:   event.InvoiceID,
-		TenantID:    event.TenantID,
+	pdfEvent := generatedPDFEvent{
+		Invoice:     entry.AggregateID,
+		Tenant:      entry.TenantID,
 		ArtifactURL: artifactURL,
 		GeneratedAt: time.Now(),
 	}
-
-	payload, _ := json.Marshal(pdfEvent)
 	ev := domainEvent{
-		name:        "pdf.generated",
-		aggregateID: event.InvoiceID,
-		tenantID:    event.TenantID,
-		payload:     payload,
+		event: pdfEvent,
 	}
-	_ = s.outboxRepo.SaveEvents(ctx, event.TenantID, []entity.DomainEvent{ev})
+	if err := s.outboxRepo.SaveEvents(ctx, entry.TenantID, []entity.DomainEvent{ev}); err != nil {
+		return fmt.Errorf("save pdf.generated event: %w", err)
+	}
 
 	return nil
 }
 
-// domainEvent is a local adapter to satisfy the entity.DomainEvent interface
-// without importing the full domain package (keeps the service decoupled).
-type domainEvent struct {
-	name        string
-	aggregateID string
-	tenantID    string
-	payload     []byte
+type generatedPDFEvent struct {
+	Invoice     string    `json:"InvoiceID"`
+	Tenant      string    `json:"TenantID"`
+	ArtifactURL string    `json:"ArtifactURL"`
+	GeneratedAt time.Time `json:"GeneratedAt"`
 }
 
-func (e domainEvent) EventName() string     { return e.name }
-func (e domainEvent) AggregateID() string   { return e.aggregateID }
-func (e domainEvent) TenantID() string      { return e.tenantID }
-func (e domainEvent) OccurredAt() time.Time { return time.Now() }
+// domainEvent adapts the generated event to the domain event interface.
+type domainEvent struct {
+	event generatedPDFEvent
+}
 
-// invoiceHTMLTemplate is the HTML template for invoice PDFs.
-// In a real implementation, this would be a more sophisticated template
-// with proper CSS, fonts, QR codes, etc.
-const invoiceHTMLTemplate = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  body { font-family: Arial, sans-serif; margin: 40px; }
-  .header { display: flex; justify-content: space-between; border-bottom: 2px solid #333; padding-bottom: 20px; }
-  .invoice-title { font-size: 24px; font-weight: bold; }
-  .invoice-meta { text-align: right; color: #666; }
-  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-  th { background: #f5f5f5; padding: 8px; text-align: left; }
-  td { padding: 8px; border-bottom: 1px solid #eee; }
-  .total { font-size: 18px; font-weight: bold; text-align: right; margin-top: 20px; }
-</style>
-</head>
-<body>
-  <div class="header">
-    <div class="invoice-title">INVOICE</div>
-    <div class="invoice-meta">
-      <div>Invoice ID: {{.InvoiceID}}</div>
-      <div>Date: {{.IssuedAt}}</div>
-    </div>
-  </div>
-  <p style="margin-top: 20px; color: #999;">
-    This is a scaffold PDF. In production, this would include full invoice details,
-    line items, tax breakdown, customer info, and payment terms.
-  </p>
-  <div class="total">Total: —</div>
-</body>
-</html>`
+func (e domainEvent) EventName() string     { return "pdf.generated" }
+func (e domainEvent) AggregateID() string   { return e.event.Invoice }
+func (e domainEvent) TenantID() string      { return e.event.Tenant }
+func (e domainEvent) OccurredAt() time.Time { return e.event.GeneratedAt }
+
+func (e domainEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(e.event)
+}

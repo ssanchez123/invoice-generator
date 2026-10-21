@@ -45,7 +45,7 @@ npm --version
 
 ## 2. Opción A — Docker Compose (todo en uno)
 
-Esta es la forma más rápida. Levanta los 5 servicios (PostgreSQL, migraciones, API, relay-worker, pdf-service y frontend) con un solo comando.
+Esta es la forma más rápida. Levanta PostgreSQL, migraciones, API, relay-worker, pdf-service y frontend con un solo comando.
 
 ### Paso 1: Construir y levantar
 
@@ -61,8 +61,10 @@ Esto hace lo siguiente automáticamente:
 3. Construye y arranca:
    - **backend** (API) → puerto `8080`
    - **relay-worker** (procesa eventos del outbox)
-   - **pdf-service** (genera PDFs de facturas)
+   - **pdf-service** (genera PDFs reales)
 4. Construye y arranca el **frontend** (nginx sirviendo el build de React) → puerto `5173`
+
+API y pdf-service comparten un volumen local para los artefactos. No se requiere una cuenta AWS ni se generan cargos. La prueba del protocolo S3 usa un servidor HTTP en memoria, sin servicios ni credenciales externos.
 
 ### Paso 2: Verificar
 
@@ -100,6 +102,8 @@ docker compose -f deploy/docker/docker-compose.yml down
 ```bash
 docker compose -f deploy/docker/docker-compose.yml down -v
 ```
+
+Este comando también elimina los PDFs del volumen local compartido.
 
 ---
 
@@ -214,10 +218,10 @@ Salida esperada:
 
 ```
 pdf-service starting...
-pdf-service polling every 3s, storage: /tmp/pdfs
+pdf-service polling every 3s
 ```
 
-Este servicio genera PDFs de facturas. Cada 3 segundos busca eventos `invoice.issued` en el outbox y genera el archivo HTML (placeholder del PDF real).
+Este servicio genera PDFs reales de facturas. Cada 3 segundos busca eventos `invoice.issued` en el outbox y, con la configuración local por defecto, guarda los archivos en `/tmp/pdfs`. El Compose completo comparte el volumen de PDFs entre API y worker.
 
 ### Paso 7: Iniciar el frontend (terminal 4)
 
@@ -254,7 +258,7 @@ curl http://localhost:8080/health
 ### Listar facturas (con el seed data)
 
 ```bash
-curl -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
+curl \
      -H "Authorization: Bearer dev-token" \
      http://localhost:8080/api/v1/invoices
 ```
@@ -340,12 +344,20 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/pdf-service-linux-amd64 ./
 
 ## 6. Ejecutar tests
 
-### Todos los tests del backend
+### Todos los tests unitarios del backend
 
 ```bash
 cd ~/Code/invoice-generator/backend
 go test ./...
 ```
+
+La integración S3-compatible usa un servidor HTTP local en memoria; no requiere AWS, MinIO ni credenciales:
+
+```bash
+make test-integration
+```
+
+No requiere cuenta ni credenciales de AWS.
 
 ### Tests con verbose
 
@@ -390,6 +402,7 @@ go test -v ./internal/api/middleware/...
 | Servicio | Puerto | Entry point | Función |
 |----------|--------|-------------|---------|
 | **PostgreSQL** | `5432` | Contenedor Docker `postgres:16-alpine` | Base de datos con RLS |
+| **PDF storage** | — | Volumen Docker `pdfdata` | Almacenamiento local compartido entre API y pdf-service |
 | **API** | `8080` | `backend/cmd/api/main.go` | HTTP API (chi router) |
 | **relay-worker** | — | `backend/cmd/relay-worker/main.go` | Procesa eventos del outbox cada 2s |
 | **pdf-service** | — | `backend/cmd/pdf-service/main.go` | Genera PDFs cada 3s |
@@ -411,7 +424,7 @@ Navegador (:5173)
     │                                  │      └── dispatcha eventos a handlers
     │                                  │
     │                                  └── pdf-service (polls outbox cada 3s)
-    │                                         └── genera HTML → /tmp/pdfs/
+    │                                         └── genera PDF → volumen compartido
     │
     └── Servir React SPA (Vite dev server)
 ```
@@ -431,7 +444,15 @@ El backend lee estas variables (con defaults para desarrollo):
 | `DB_USER` | `invoicegen` | Usuario de la BD |
 | `DB_PASSWORD` | `invoicegen_dev` | Password de la BD |
 | `JWT_SECRET` | `dev-secret-change-in-production` | Secret para JWT (cambiar en prod) |
-| `PDF_STORAGE_PATH` | `/tmp/pdfs` | Directorio para guardar PDFs |
+| `PDF_STORAGE_BACKEND` | `local` | Backend de artefactos (`local` o `s3`; producción requiere `s3`) |
+| `PDF_STORAGE_PATH` | `/tmp/pdfs` | Directorio cuando se usa el backend `local` |
+| `PDF_S3_ENDPOINT` | — | Endpoint S3-compatible opcional (p. ej., MinIO local) |
+| `PDF_S3_BUCKET` | — | Bucket existente para los artefactos |
+| `PDF_S3_REGION` | `us-east-1` | Región S3 |
+| `PDF_S3_FORCE_PATH_STYLE` | `false` | Actívalo para MinIO y varios proveedores compatibles |
+| `PDF_S3_ACCESS_KEY_ID` / `PDF_S3_SECRET_ACCESS_KEY` | — | Credenciales explícitas para endpoints S3 personalizados |
+| `PDF_S3_SESSION_TOKEN` | — | Token temporal opcional para endpoints S3 personalizados |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | — | Cadena estándar del SDK cuando se usa AWS S3 sin endpoint personalizado |
 | `ENVIRONMENT` | `development` | Entorno (development/production) |
 
 ### .env ejemplo para desarrollo local
@@ -447,12 +468,13 @@ DB_NAME=invoicegen
 DB_USER=invoicegen
 DB_PASSWORD=invoicegen_dev
 JWT_SECRET=dev-secret-change-in-production
-PDF_STORAGE_PATH=/tmp/pdfs
 ENVIRONMENT=development
 EOF
 ```
 
 > **Nota:** Go no carga `.env` automáticamente. Si quieres usarlo, puedes exportar las variables con `set -a; source .env; set +a` antes de correr `go run`.
+>
+> Para ejecutar API y pdf-service manualmente con un endpoint S3-compatible, configura `PDF_STORAGE_BACKEND=s3`, `PDF_S3_ENDPOINT`, `PDF_S3_BUCKET`, `PDF_S3_REGION`, `PDF_S3_ACCESS_KEY_ID` y `PDF_S3_SECRET_ACCESS_KEY`. En AWS S3 sin endpoint personalizado se usa la cadena estándar de credenciales del SDK. En desarrollo, filesystem local es el default y no requiere credenciales.
 
 ---
 

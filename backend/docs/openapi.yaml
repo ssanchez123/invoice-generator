@@ -34,7 +34,7 @@ servers:
 
 tags:
   - name: Auth
-    description: Authentication and tenant registration
+    description: Authentication; public registration is disabled
   - name: Invoices
     description: Invoice lifecycle management
   - name: Customers
@@ -73,26 +73,12 @@ paths:
   /api/v1/auth/register:
     post:
       tags: [Auth]
-      summary: Register a new tenant
-      description: Creates a new tenant organization and admin user.
+      summary: Public registration disabled
+      description: Public tenant and user registration is disabled until trusted provisioning is available.
       security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RegisterRequest'
       responses:
-        '201':
-          description: Tenant and user created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '409':
-          description: Email already registered
+        '403':
+          description: Public registration is disabled
           content:
             application/json:
               schema:
@@ -325,7 +311,7 @@ paths:
       description: |
         Returns the PDF artifact for the invoice.
         If the PDF hasn't been generated yet (async via outbox),
-        returns a 202 with a retry hint.
+        returns 404 until generation completes. Invoice access is tenant-scoped.
       parameters:
         - $ref: '#/components/parameters/InvoiceId'
       responses:
@@ -336,12 +322,14 @@ paths:
               schema:
                 type: string
                 format: binary
-        '202':
-          description: PDF not yet generated, retry later
+        '404':
+          description: Invoice or PDF artifact not found
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+        '503':
+          description: PDF storage is unavailable
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -917,22 +905,11 @@ components:
 
     LoginRequest:
       type: object
-      required: [email, password]
+      required: [tenant_id, email, password]
       properties:
-        email:
+        tenant_id:
           type: string
-          format: email
-        password:
-          type: string
-          format: password
-
-    RegisterRequest:
-      type: object
-      required: [tenant_name, email, password]
-      properties:
-        tenant_name:
-          type: string
-          example: ACME Corp
+          format: uuid
         email:
           type: string
           format: email
@@ -943,15 +920,32 @@ components:
     AuthResponse:
       type: object
       properties:
-        token:
+        access_token:
           type: string
           example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-        expires_at:
+        token_type:
           type: string
-          format: date-time
-        tenant_id:
-          type: string
-          format: uuid
-        user_id:
-          type: string
-          format: uuid
+          example: Bearer
+        expires_in:
+          type: integer
+          description: Access token lifetime in seconds
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            tenant_id:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            role:
+              type: string
+            first_name:
+              type: string
+            last_name:
+              type: string
+            full_name:
+              type: string

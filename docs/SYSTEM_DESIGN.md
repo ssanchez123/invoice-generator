@@ -116,7 +116,6 @@ DELETE /api/v1/subscriptions/:id  — Cancel subscription
 GET    /api/v1/audit               — Audit trail (filtered)
 
 POST   /api/v1/auth/login          — Login (JWT)
-POST   /api/v1/auth/register        — Register tenant
 ```
 
 ## Data Model (simplified)
@@ -146,9 +145,9 @@ idempotency_records (key, tenant_id, response_hash, expires_at)
 2. **Jurisdiction-aware tax** — tax rules by country/state, applicable per line item
 3. **Recurring billing** — subscription → scheduled invoice generation via cron-like worker
 4. **Idempotency** — `Idempotency-Key` header on POST endpoints, stored with response hash
-5. **Outbox pattern** — domain events written to outbox table in same TX as aggregate, relay worker publishes them
+5. **Outbox pattern** — domain events and per-consumer deliveries use the same TX boundary; workers use RLS-scoped leases and independent retries
 6. **Row-level security** — PostgreSQL RLS policies enforce tenant isolation at DB level
 7. **Audit trail** — every state change produces an immutable audit entry
 8. **Invoice numbering** — tenant-scoped sequential, gap-resistant, format configurable per tenant
-9. **PDF generation** — separate Go service, receives events, generates PDF, stores artifact
+9. **PDF generation** — separate Go service renders invoice/customer/tenant data to a PDF and stores it by tenant-scoped key; local development uses a shared filesystem volume, protocol tests use an in-process S3 endpoint, production uses S3-compatible storage
 10. **Soft deletes** — never hard-delete, mark as deleted for audit integrity

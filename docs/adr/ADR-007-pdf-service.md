@@ -17,16 +17,21 @@ Options considered:
 
 The pdf-service:
 1. Subscribes to `InvoiceIssued` events via the relay
-2. Renders PDF using Go templates + a PDF library (`go-pdf` or `chromedp` for HTML→PDF)
-3. Stores the PDF artifact (local filesystem for dev, S3-compatible for prod)
-4. Emits `PDFGenerated` event back to outbox
+2. Loads the tenant-scoped invoice, customer, and seller data
+3. Renders a real PDF using the pure-Go `gofpdf` library
+4. Stores the PDF artifact using a deterministic tenant-scoped key in local storage or S3-compatible object storage
+5. Emits `PDFGenerated` only after the artifact has been persisted
 
-The API service can also request PDF generation synchronously via internal HTTP call when the user clicks "Download PDF" and no cached version exists.
+Development uses a local shared filesystem volume. S3 integration tests run against an in-process HTTP endpoint, so they need no AWS account, AWS charges, external service, or cloud credentials. Production requires S3-compatible storage and `PDF_STORAGE_BACKEND=s3`; AWS uses the SDK credential chain, while custom endpoints use explicit PDF-scoped credentials. Local filesystem storage is rejected when `ENVIRONMENT=production`.
+
+The API download endpoint verifies the invoice belongs to the authenticated tenant before retrieving the artifact. It returns 404 until asynchronous generation has completed.
 
 ## Consequences
 - ✅ API service stays responsive (PDF work is offloaded)
 - ✅ pdf-service can be scaled independently
 - ✅ Can swap PDF engine without touching API
 - ✅ Failed PDF jobs retry via outbox without losing data
+- ✅ Deterministic object keys make retry writes idempotent
+- ✅ S3 protocol tests do not require cloud credentials or external services
 - ⚠️ Additional service to deploy and monitor
-- ⚠️ Slight latency on first PDF request (async generation)
+- ⚠️ The download endpoint returns 404 until asynchronous generation completes

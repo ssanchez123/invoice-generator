@@ -76,7 +76,7 @@ Eso es todo. Seis servicios arrancan:
 curl http://localhost:8080/healthz
 
 # Listar facturas (tenant de desarrollo)
-curl -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
+curl \
      -H "Authorization: Bearer dev-token" \
      http://localhost:8080/api/v1/invoices
 
@@ -184,8 +184,8 @@ invoice-generator/
 
 | Método | Endpoint | Descripción |
 |--------|----------|-------------|
-| `POST` | `/api/v1/auth/register` | Registrar nuevo tenant (scaffold) |
-| `POST` | `/api/v1/auth/login` | Login (scaffold) |
+| `POST` | `/api/v1/auth/register` | Registro público deshabilitado (403) |
+| `POST` | `/api/v1/auth/login` | Iniciar sesión |
 | `POST` | `/api/v1/invoices` | Crear factura (idempotente) |
 | `GET` | `/api/v1/invoices` | Listar facturas (paginado, filtrable) |
 | `GET` | `/api/v1/invoices/:id` | Detalle de factura |
@@ -209,11 +209,8 @@ Especificación completa: [docs/openapi.yaml](docs/openapi.yaml)
 ### Autenticación
 
 ```bash
-# Todos los endpoints protegidos requieren:
-# - Authorization: Bearer <token>
-# - X-Tenant-ID: <tenant-uuid>
+# Los endpoints protegidos requieren JWT; el tenant se obtiene de sus claims validados.
 curl -H "Authorization: Bearer <token>" \
-     -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
      http://localhost:8080/api/v1/invoices
 ```
 
@@ -223,7 +220,6 @@ curl -H "Authorization: Bearer <token>" \
 # Los endpoints POST aceptan Idempotency-Key para retries seguros
 curl -X POST \
      -H "Idempotency-Key: $(uuidgen)" \
-     -H "X-Tenant-ID: 00000000-0000-0000-0000-000000000001" \
      -H "Authorization: Bearer dev-token" \
      -H "Content-Type: application/json" \
      -d '{"customer_id":"...", "currency":"USD", "due_date":"...", "items":[...]}' \

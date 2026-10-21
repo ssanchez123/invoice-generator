@@ -286,17 +286,16 @@ Al final de cada sección, escribe un score: **X/Y** items cumplidos.
 - [ ] CORS incluye Idempotency-Key en AllowedHeaders
 - [ ] Health check en `/health` (sin auth)
 - [ ] API v1 bajo `/api/v1` prefix
-- [ ] Auth routes (`/auth/login`, `/auth/register`) sin JWT
-- [ ] Protected routes con JWTAuth middleware
+- [x] Login público; registro público deshabilitado hasta tener provisión confiable
+- [x] Protected routes con JWTAuth middleware antes de TenantContext
 - [ ] Server tiene ReadTimeout, WriteTimeout, IdleTimeout configurados
 - [ ] Graceful shutdown con context timeout (10s)
 - [ ] Signal handling (SIGINT, SIGTERM)
 
 ### 5.2 Middleware
 
-- [ ] `TenantContext` extrae tenant_id (header en scaffold, JWT en prod)
-- [ ] `TenantContext` rechaza con 400 si falta tenant_id en paths protegidos
-- [ ] `TenantContext` permite paths públicos sin tenant_id
+- [x] `TenantContext` deriva tenant_id de claims establecidos por JWTAuth; no confía en headers
+- [x] `TenantContext` rechaza con 401 si falta el tenant claim
 - [ ] `JWTAuth` valida formato `Bearer <token>`
 - [ ] `JWTAuth` rechaza con 401 si falta Authorization header
 - [ ] `JWTAuth` rechaza con 401 si formato es inválido
@@ -709,7 +708,7 @@ Al final de cada sección, escribe un score: **X/Y** items cumplidos.
 - [ ] JWT validation es pass-through — documentado
 - [ ] Idempotency middleware es pass-through — documentado
 - [ ] ListInvoices handler retorna placeholder — documentado
-- [ ] PDF service genera HTML (no PDF real) — documentado
+- [x] PDF service genera un PDF real y persiste el artefacto con clave tenant-scoped
 - [ ] No hay go.sum (dependencias no resueltas)
 - [ ] Frontend no hace fetch real al API
 - [ ] No hay .dockerignore

@@ -86,11 +86,20 @@ type OutboxRepository interface {
 	// Must be called within the same transaction as the aggregate save.
 	SaveEvents(ctx context.Context, tenantID string, events []entity.DomainEvent) error
 
-	// FindUnprocessed returns outbox entries not yet relayed.
-	FindUnprocessed(ctx context.Context, limit int) ([]OutboxEntry, error)
+	// ListTenantIDs returns tenant IDs for background processing.
+	ListTenantIDs(ctx context.Context) ([]string, error)
 
-	// MarkProcessed marks an outbox entry as successfully relayed.
-	MarkProcessed(ctx context.Context, id string) error
+	// ClaimDeliveries claims pending or expired deliveries for one tenant and consumer.
+	ClaimDeliveries(ctx context.Context, tenantID, consumer, workerID string, limit int, lease time.Duration) ([]OutboxEntry, error)
+
+	// RenewDeliveryLease extends an unexpired lease still owned by this worker.
+	RenewDeliveryLease(ctx context.Context, tenantID, eventID, consumer, workerID string, lease time.Duration) error
+
+	// CompleteDelivery acknowledges a delivery owned by this worker.
+	CompleteDelivery(ctx context.Context, tenantID, eventID, consumer, workerID string) error
+
+	// RetryDelivery releases a failed delivery with backoff or marks it failed after the retry limit.
+	RetryDelivery(ctx context.Context, tenantID, eventID, consumer, workerID string, cause error) error
 }
 
 // OutboxEntry is the read model for outbox entries.
@@ -101,6 +110,7 @@ type OutboxEntry struct {
 	EventType   string
 	Payload     []byte
 	CreatedAt   time.Time
+	Attempts    int
 }
 
 // IdempotencyRepository is the port for idempotency key storage.

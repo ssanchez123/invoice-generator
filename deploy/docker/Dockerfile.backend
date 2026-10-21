@@ -14,6 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/api ./cmd/api
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/relay-worker ./cmd/relay-worker
 RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/pdf-service ./cmd/pdf-service
+RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/outbox-ops ./cmd/outbox-ops
 
 # Final image
 FROM alpine:3.20
@@ -23,6 +24,7 @@ RUN apk add --no-cache ca-certificates tzdata postgresql-client
 COPY --from=builder /bin/api /usr/local/bin/api
 COPY --from=builder /bin/relay-worker /usr/local/bin/relay-worker
 COPY --from=builder /bin/pdf-service /usr/local/bin/pdf-service
+COPY --from=builder /bin/outbox-ops /usr/local/bin/outbox-ops
 COPY --from=builder /app/migrations /migrations
 COPY --from=builder /app/docs /docs
 COPY migrate.sh /usr/local/bin/migrate.sh

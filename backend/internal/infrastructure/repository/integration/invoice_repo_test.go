@@ -97,24 +97,29 @@ func TestInvoiceRepository_FindByIDForUpdate(t *testing.T) {
 		TenantID:   TestTenantID,
 		CustomerID: TestCustomerID,
 		Number:     valueobject.InvoiceNumber{Value: "INV-2024-00002"},
-		Status:     entity.InvoiceStatusIssued,
-		IssueDate:  now,
+		Status:     entity.InvoiceStatusDraft,
 		DueDate:    now.Add(30 * 24 * time.Hour),
 		Currency:   "USD",
-		Items: []entity.InvoiceItem{
-			{
-				ID:          "44444444-4444-4444-4444-444444444444",
-				Description: "Test item",
-				Quantity:    1,
-				UnitPrice:   valueobject.Money{Amount: 10000, Currency: "USD"},
-			},
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := invoice.AddItem(entity.InvoiceItem{
+		ID:          "44444444-4444-4444-4444-444444444444",
+		Description: "Test item",
+		Quantity:    1,
+		UnitPrice:   valueobject.Money{Amount: 10000, Currency: "USD"},
+	}); err != nil {
+		t.Fatalf("add invoice item: %v", err)
 	}
 
 	if err := invoiceRepo.Save(ctx, invoice); err != nil {
 		t.Fatalf("Save failed: %v", err)
+	}
+	if err := invoice.Issue(now); err != nil {
+		t.Fatalf("issue invoice: %v", err)
+	}
+	if err := invoiceRepo.Save(ctx, invoice); err != nil {
+		t.Fatalf("save issued invoice: %v", err)
 	}
 
 	// Use UnitOfWork to begin a transaction
@@ -233,23 +238,28 @@ func TestInvoiceRepository_FindOverdue(t *testing.T) {
 		TenantID:   TestTenantID,
 		CustomerID: TestCustomerID,
 		Number:     valueobject.InvoiceNumber{Value: num},
-		Status:     entity.InvoiceStatusIssued,
-		IssueDate:  now.Add(-60 * 24 * time.Hour),
+		Status:     entity.InvoiceStatusDraft,
 		DueDate:    now.Add(-30 * 24 * time.Hour), // 30 days ago
 		Currency:   "USD",
-		Items: []entity.InvoiceItem{
-			{
-				ID:          "66666666-6666-6666-6666-666666666666",
-				Description: "Overdue item",
-				Quantity:    1,
-				UnitPrice:   valueobject.Money{Amount: 5000, Currency: "USD"},
-			},
-		},
-		CreatedAt: now.Add(-60 * 24 * time.Hour),
-		UpdatedAt: now.Add(-60 * 24 * time.Hour),
+		CreatedAt:  now.Add(-60 * 24 * time.Hour),
+		UpdatedAt:  now.Add(-60 * 24 * time.Hour),
+	}
+	if err := invoice.AddItem(entity.InvoiceItem{
+		ID:          "66666666-6666-6666-6666-666666666666",
+		Description: "Overdue item",
+		Quantity:    1,
+		UnitPrice:   valueobject.Money{Amount: 5000, Currency: "USD"},
+	}); err != nil {
+		t.Fatalf("add invoice item: %v", err)
 	}
 	if err := invoiceRepo.Save(ctx, invoice); err != nil {
 		t.Fatalf("Save failed: %v", err)
+	}
+	if err := invoice.Issue(now.Add(-60 * 24 * time.Hour)); err != nil {
+		t.Fatalf("issue overdue invoice: %v", err)
+	}
+	if err := invoiceRepo.Save(ctx, invoice); err != nil {
+		t.Fatalf("save issued overdue invoice: %v", err)
 	}
 
 	// Find overdue

@@ -26,22 +26,29 @@ func TestPaymentRepository_SaveAndFindByInvoice(t *testing.T) {
 		TenantID:   TestTenantID,
 		CustomerID: TestCustomerID,
 		Number:     valueobject.InvoiceNumber{Value: num},
-		Status:     entity.InvoiceStatusIssued,
-		IssueDate:  now,
+		Status:     entity.InvoiceStatusDraft,
 		DueDate:    now.Add(30 * 24 * time.Hour),
 		Currency:   "USD",
-		Items: []entity.InvoiceItem{
-			{
-				ID:          "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-				Description: "Test",
-				Quantity:    1,
-				UnitPrice:   valueobject.Money{Amount: 10000, Currency: "USD"},
-			},
-		},
-		CreatedAt: now,
-		UpdatedAt: now,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
-	invoiceRepo.Save(ctx, invoice)
+	if err := invoice.AddItem(entity.InvoiceItem{
+		ID:          "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Description: "Test",
+		Quantity:    1,
+		UnitPrice:   valueobject.Money{Amount: 10000, Currency: "USD"},
+	}); err != nil {
+		t.Fatalf("add invoice item: %v", err)
+	}
+	if err := invoiceRepo.Save(ctx, invoice); err != nil {
+		t.Fatalf("save draft invoice: %v", err)
+	}
+	if err := invoice.Issue(now); err != nil {
+		t.Fatalf("issue invoice: %v", err)
+	}
+	if err := invoiceRepo.Save(ctx, invoice); err != nil {
+		t.Fatalf("save issued invoice: %v", err)
+	}
 
 	// Save a payment
 	payment := &entity.Payment{

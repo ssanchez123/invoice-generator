@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/santiagossaa/invoice-generator/internal/ctxkey"
@@ -9,16 +10,10 @@ import (
 	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 )
 
+var ErrInvoiceSnapshotUnavailable = errors.New("immutable issued invoice snapshot is unavailable")
+
 type InvoiceReader interface {
 	FindByID(ctx context.Context, id string) (*entity.Invoice, error)
-}
-
-type CustomerReader interface {
-	FindByID(ctx context.Context, id string) (*entity.Customer, error)
-}
-
-type TenantReader interface {
-	FindByID(ctx context.Context, id string) (*entity.Tenant, error)
 }
 
 type Renderer interface {
@@ -26,26 +21,20 @@ type Renderer interface {
 }
 
 type Document struct {
-	Invoice  *entity.Invoice
-	Customer *entity.Customer
-	Tenant   *entity.Tenant
+	Snapshot entity.InvoiceSnapshot
 }
 
 type Generator struct {
-	invoices  InvoiceReader
-	customers CustomerReader
-	tenants   TenantReader
-	renderer  Renderer
-	store     port.PDFArtifactStore
+	invoices InvoiceReader
+	renderer Renderer
+	store    port.PDFArtifactStore
 }
 
-func NewGenerator(invoices InvoiceReader, customers CustomerReader, tenants TenantReader, renderer Renderer, store port.PDFArtifactStore) *Generator {
+func NewGenerator(invoices InvoiceReader, renderer Renderer, store port.PDFArtifactStore) *Generator {
 	return &Generator{
-		invoices:  invoices,
-		customers: customers,
-		tenants:   tenants,
-		renderer:  renderer,
-		store:     store,
+		invoices: invoices,
+		renderer: renderer,
+		store:    store,
 	}
 }
 
@@ -59,28 +48,18 @@ func (g *Generator) Generate(ctx context.Context, tenantID, invoiceID string) er
 	if invoice.TenantID != tenantID {
 		return fmt.Errorf("invoice tenant does not match delivery tenant")
 	}
-
-	customer, err := g.customers.FindByID(tenantCtx, invoice.CustomerID)
-	if err != nil {
-		return fmt.Errorf("load invoice customer: %w", err)
+	if invoice.IssuedSnapshot == nil {
+		return ErrInvoiceSnapshotUnavailable
 	}
-	if customer.TenantID != tenantID {
-		return fmt.Errorf("customer tenant does not match delivery tenant")
-	}
-
-	tenant, err := g.tenants.FindByID(ctx, tenantID)
-	if err != nil {
-		return fmt.Errorf("load invoice tenant: %w", err)
-	}
-	if tenant.ID != tenantID {
-		return fmt.Errorf("loaded tenant does not match delivery tenant")
+	snapshot := *invoice.IssuedSnapshot
+	if snapshot.Version != entity.InvoiceSnapshotVersion ||
+		snapshot.InvoiceID != invoiceID ||
+		snapshot.TenantID != tenantID ||
+		snapshot.CustomerID != invoice.CustomerID {
+		return fmt.Errorf("issued invoice snapshot identity or version is invalid")
 	}
 
-	contents, err := g.renderer.Render(Document{
-		Invoice:  invoice,
-		Customer: customer,
-		Tenant:   tenant,
-	})
+	contents, err := g.renderer.Render(Document{Snapshot: snapshot})
 	if err != nil {
 		return fmt.Errorf("render invoice PDF: %w", err)
 	}

@@ -56,6 +56,47 @@ func TestInvoiceItemLineTotal(t *testing.T) {
 	})
 }
 
+func TestNewInvoiceSnapshotCopiesIssuedInvoiceData(t *testing.T) {
+	issuedAt := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	invoice := &Invoice{
+		ID:         "invoice-1",
+		TenantID:   "tenant-1",
+		CustomerID: "customer-1",
+		Number:     valueobject.InvoiceNumber{Value: "INV-2026-00001"},
+		Status:     InvoiceStatusIssued,
+		IssueDate:  issuedAt,
+		DueDate:    issuedAt.AddDate(0, 0, 30),
+		Currency:   "USD",
+		Subtotal:   valueobject.Money{Amount: 2000, Currency: "USD"},
+		TaxTotal:   valueobject.Money{Amount: 200, Currency: "USD"},
+		Total:      valueobject.Money{Amount: 2200, Currency: "USD"},
+		Metadata:   map[string]any{"purchase_order": "PO-1"},
+		Items: []InvoiceItem{{
+			ID:          "item-1",
+			Description: "Consulting",
+			Quantity:    2,
+			UnitPrice:   valueobject.Money{Amount: 1000, Currency: "USD"},
+			TaxRateBPS:  1000,
+		}},
+	}
+	seller := InvoicePartySnapshot{Name: "Seller"}
+	customer := InvoicePartySnapshot{Name: "Customer"}
+
+	snapshot, err := NewInvoiceSnapshot(invoice, seller, customer)
+	if err != nil {
+		t.Fatalf("create snapshot: %v", err)
+	}
+	invoice.Metadata["purchase_order"] = "PO-2"
+	invoice.Items[0].Description = "Changed after issue"
+
+	if snapshot.Version != InvoiceSnapshotVersion ||
+		snapshot.Items[0].Description != "Consulting" ||
+		snapshot.Items[0].Total != 2200 ||
+		snapshot.Metadata["purchase_order"] != "PO-1" {
+		t.Fatalf("snapshot did not preserve issued values: %+v", snapshot)
+	}
+}
+
 func TestInvoiceItemTaxAmount(t *testing.T) {
 	item := InvoiceItem{
 		Quantity:   1,

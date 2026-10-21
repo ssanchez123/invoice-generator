@@ -48,8 +48,6 @@ func main() {
 	}
 	pdfGenerator := pdfapp.NewGenerator(
 		repository.NewInvoiceRepository(db),
-		repository.NewCustomerRepository(db),
-		repository.NewTenantRepository(db),
 		pdfrenderer.NewGoFPDFRenderer(),
 		pdfStore,
 	)

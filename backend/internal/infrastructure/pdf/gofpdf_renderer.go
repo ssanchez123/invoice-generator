@@ -8,6 +8,7 @@ import (
 	gofpdf "github.com/phpdave11/gofpdf"
 
 	pdfapp "github.com/santiagossaa/invoice-generator/internal/application/pdf"
+	"github.com/santiagossaa/invoice-generator/internal/domain/entity"
 	"github.com/santiagossaa/invoice-generator/internal/domain/valueobject"
 )
 
@@ -18,15 +19,22 @@ func NewGoFPDFRenderer() *GoFPDFRenderer {
 }
 
 func (r *GoFPDFRenderer) Render(doc pdfapp.Document) ([]byte, error) {
-	if doc.Invoice == nil || doc.Customer == nil || doc.Tenant == nil {
-		return nil, fmt.Errorf("invoice, customer, and tenant are required")
+	snapshot := doc.Snapshot
+	if snapshot.Version != entity.InvoiceSnapshotVersion ||
+		snapshot.InvoiceID == "" ||
+		snapshot.Number == "" ||
+		snapshot.Currency == "" ||
+		snapshot.Seller.Name == "" ||
+		snapshot.Customer.Name == "" ||
+		len(snapshot.Items) == 0 {
+		return nil, fmt.Errorf("valid immutable invoice snapshot is required")
 	}
 
 	p := gofpdf.New("P", "mm", "A4", "")
 	p.SetMargins(15, 15, 15)
 	p.SetAutoPageBreak(true, 18)
-	p.SetTitle("Invoice "+doc.Invoice.Number.String(), true)
-	p.SetAuthor(doc.Tenant.Name, true)
+	p.SetTitle("Invoice "+snapshot.Number, true)
+	p.SetAuthor(snapshot.Seller.Name, true)
 	p.AddPage()
 
 	translate := p.UnicodeTranslatorFromDescriptor("cp1252")
@@ -36,19 +44,19 @@ func (r *GoFPDFRenderer) Render(doc pdfapp.Document) ([]byte, error) {
 	p.SetTextColor(31, 41, 55)
 	p.CellFormat(95, 12, write("INVOICE"), "", 0, "L", false, 0, "")
 	p.SetFont("Arial", "B", 12)
-	p.CellFormat(85, 12, write(doc.Invoice.Number.String()), "", 1, "R", false, 0, "")
+	p.CellFormat(85, 12, write(snapshot.Number), "", 1, "R", false, 0, "")
 
 	p.SetFont("Arial", "B", 10)
-	p.CellFormat(90, 6, write(doc.Tenant.Name), "", 0, "L", false, 0, "")
+	p.CellFormat(90, 6, write(snapshot.Seller.Name), "", 0, "L", false, 0, "")
 	p.SetFont("Arial", "", 10)
-	p.CellFormat(90, 6, write("Issue date: "+doc.Invoice.IssueDate.Format("2006-01-02")), "", 1, "R", false, 0, "")
+	p.CellFormat(90, 6, write("Issue date: "+snapshot.IssueDate.Format("2006-01-02")), "", 1, "R", false, 0, "")
 	p.SetFont("Arial", "", 9)
-	writeAddress(p, write, doc.Tenant.Address)
-	if doc.Tenant.TaxID != "" {
-		p.CellFormat(90, 5, write("Tax ID: "+doc.Tenant.TaxID), "", 0, "L", false, 0, "")
+	writeAddress(p, write, snapshot.Seller.Address)
+	if snapshot.Seller.TaxID != "" {
+		p.CellFormat(90, 5, write("Tax ID: "+snapshot.Seller.TaxID), "", 0, "L", false, 0, "")
 	}
-	if !doc.Invoice.DueDate.IsZero() {
-		p.CellFormat(90, 5, write("Due date: "+doc.Invoice.DueDate.Format("2006-01-02")), "", 1, "R", false, 0, "")
+	if !snapshot.DueDate.IsZero() {
+		p.CellFormat(90, 5, write("Due date: "+snapshot.DueDate.Format("2006-01-02")), "", 1, "R", false, 0, "")
 	} else {
 		p.Ln(5)
 	}
@@ -62,14 +70,14 @@ func (r *GoFPDFRenderer) Render(doc pdfapp.Document) ([]byte, error) {
 	p.SetFont("Arial", "B", 10)
 	p.CellFormat(90, 6, write("Bill to"), "", 1, "L", false, 0, "")
 	p.SetFont("Arial", "", 10)
-	p.CellFormat(90, 5, write(doc.Customer.Name), "", 1, "L", false, 0, "")
-	if doc.Customer.TaxID != "" {
-		p.CellFormat(90, 5, write("Tax ID: "+doc.Customer.TaxID), "", 1, "L", false, 0, "")
+	p.CellFormat(90, 5, write(snapshot.Customer.Name), "", 1, "L", false, 0, "")
+	if snapshot.Customer.TaxID != "" {
+		p.CellFormat(90, 5, write("Tax ID: "+snapshot.Customer.TaxID), "", 1, "L", false, 0, "")
 	}
-	if doc.Customer.Email != "" {
-		p.CellFormat(90, 5, write(doc.Customer.Email), "", 1, "L", false, 0, "")
+	if snapshot.Customer.Email != "" {
+		p.CellFormat(90, 5, write(snapshot.Customer.Email), "", 1, "L", false, 0, "")
 	}
-	writeAddress(p, write, doc.Customer.Address)
+	writeAddress(p, write, snapshot.Customer.Address)
 	p.Ln(8)
 
 	columns := []struct {
@@ -95,12 +103,7 @@ func (r *GoFPDFRenderer) Render(doc pdfapp.Document) ([]byte, error) {
 	}
 	drawTableHeader()
 
-	for _, item := range doc.Invoice.Items {
-		total, err := item.LineTotal()
-		if err != nil {
-			return nil, fmt.Errorf("calculate line total: %w", err)
-		}
-
+	for _, item := range snapshot.Items {
 		description := write(item.Description)
 		lines := p.SplitLines([]byte(description), columns[0].width-4)
 		rowHeight := float64(len(lines)) * 5
@@ -121,10 +124,10 @@ func (r *GoFPDFRenderer) Render(doc pdfapp.Document) ([]byte, error) {
 
 		values := []string{
 			fmt.Sprintf("%d", item.Quantity),
-			item.UnitPrice.String(),
+			valueobject.Money{Amount: item.UnitPrice, Currency: snapshot.Currency}.String(),
 			formatBasisPoints(item.DiscountBPS),
 			formatBasisPoints(item.TaxRateBPS),
-			total.String(),
+			valueobject.Money{Amount: item.Total, Currency: snapshot.Currency}.String(),
 		}
 		for i, value := range values {
 			p.SetXY(x, y)
@@ -144,19 +147,19 @@ func (r *GoFPDFRenderer) Render(doc pdfapp.Document) ([]byte, error) {
 		p.CellFormat(135, 7, write(label), "", 0, "R", false, 0, "")
 		p.CellFormat(45, 7, write(amount.String()), "", 1, "R", false, 0, "")
 	}
-	writeTotal("Subtotal", doc.Invoice.Subtotal, false)
-	writeTotal("Tax", doc.Invoice.TaxTotal, false)
+	writeTotal("Subtotal", valueobject.Money{Amount: snapshot.Subtotal, Currency: snapshot.Currency}, false)
+	writeTotal("Tax", valueobject.Money{Amount: snapshot.TaxTotal, Currency: snapshot.Currency}, false)
 	p.SetDrawColor(107, 114, 128)
 	p.Line(150, p.GetY(), 195, p.GetY())
 	p.Ln(2)
-	writeTotal("Total due", doc.Invoice.Total, true)
+	writeTotal("Total due", valueobject.Money{Amount: snapshot.Total, Currency: snapshot.Currency}, true)
 
-	if strings.TrimSpace(doc.Invoice.Notes) != "" {
+	if strings.TrimSpace(snapshot.Notes) != "" {
 		p.Ln(8)
 		p.SetFont("Arial", "B", 9)
 		p.CellFormat(180, 6, write("Notes"), "", 1, "L", false, 0, "")
 		p.SetFont("Arial", "", 9)
-		p.MultiCell(180, 5, write(doc.Invoice.Notes), "", "L", false)
+		p.MultiCell(180, 5, write(snapshot.Notes), "", "L", false)
 	}
 
 	var output bytes.Buffer

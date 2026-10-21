@@ -21,25 +21,6 @@ func (s invoiceReaderStub) FindByID(ctx context.Context, _ string) (*entity.Invo
 	return s.invoice, s.err
 }
 
-type customerReaderStub struct {
-	customer *entity.Customer
-}
-
-func (s customerReaderStub) FindByID(ctx context.Context, _ string) (*entity.Customer, error) {
-	if ctx.Value(ctxkey.TenantIDKey) != s.customer.TenantID {
-		return nil, errors.New("customer lookup was not tenant scoped")
-	}
-	return s.customer, nil
-}
-
-type tenantReaderStub struct {
-	tenant *entity.Tenant
-}
-
-func (s tenantReaderStub) FindByID(context.Context, string) (*entity.Tenant, error) {
-	return s.tenant, nil
-}
-
 type rendererStub struct {
 	document Document
 }
@@ -70,15 +51,25 @@ func (s *storeStub) GetInvoicePDF(context.Context, string, string) ([]byte, erro
 func TestGeneratorLoadsTenantScopedInvoiceAndStoresPDF(t *testing.T) {
 	const tenantID = "tenant-1"
 	const invoiceID = "invoice-1"
-	invoice := &entity.Invoice{ID: invoiceID, TenantID: tenantID, CustomerID: "customer-1"}
-	customer := &entity.Customer{ID: "customer-1", TenantID: tenantID}
-	tenant := &entity.Tenant{ID: tenantID}
+	snapshot := entity.InvoiceSnapshot{
+		Version:    entity.InvoiceSnapshotVersion,
+		InvoiceID:  invoiceID,
+		TenantID:   tenantID,
+		CustomerID: "customer-1",
+		Number:     "INV-2026-00001",
+		Seller:     entity.InvoicePartySnapshot{Name: "Seller"},
+		Customer:   entity.InvoicePartySnapshot{Name: "Customer"},
+	}
+	invoice := &entity.Invoice{
+		ID:             invoiceID,
+		TenantID:       tenantID,
+		CustomerID:     "customer-1",
+		IssuedSnapshot: &snapshot,
+	}
 	renderer := &rendererStub{}
 	store := &storeStub{}
 	generator := NewGenerator(
 		invoiceReaderStub{invoice: invoice},
-		customerReaderStub{customer: customer},
-		tenantReaderStub{tenant: tenant},
 		renderer,
 		store,
 	)
@@ -86,8 +77,10 @@ func TestGeneratorLoadsTenantScopedInvoiceAndStoresPDF(t *testing.T) {
 	if err := generator.Generate(context.Background(), tenantID, invoiceID); err != nil {
 		t.Fatalf("generate PDF: %v", err)
 	}
-	if renderer.document.Invoice != invoice || renderer.document.Customer != customer || renderer.document.Tenant != tenant {
-		t.Fatal("renderer did not receive the loaded invoice, customer, and tenant")
+	if renderer.document.Snapshot.InvoiceID != invoiceID ||
+		renderer.document.Snapshot.Seller.Name != "Seller" ||
+		renderer.document.Snapshot.Customer.Name != "Customer" {
+		t.Fatal("renderer did not receive the immutable invoice snapshot")
 	}
 	if store.tenantID != tenantID || store.invoiceID != invoiceID {
 		t.Fatalf("stored artifact under tenant %q invoice %q", store.tenantID, store.invoiceID)
@@ -102,8 +95,6 @@ func TestGeneratorRejectsCrossTenantInvoice(t *testing.T) {
 	store := &storeStub{}
 	generator := NewGenerator(
 		invoiceReaderStub{invoice: invoice},
-		customerReaderStub{customer: &entity.Customer{TenantID: "other-tenant"}},
-		tenantReaderStub{tenant: &entity.Tenant{ID: "requested-tenant"}},
 		&rendererStub{},
 		store,
 	)
@@ -113,5 +104,18 @@ func TestGeneratorRejectsCrossTenantInvoice(t *testing.T) {
 	}
 	if store.contents != nil {
 		t.Fatal("cross-tenant invoice must not be stored")
+	}
+}
+
+func TestGeneratorRejectsMissingSnapshot(t *testing.T) {
+	invoice := &entity.Invoice{ID: "invoice-1", TenantID: "tenant-1"}
+	store := &storeStub{}
+	generator := NewGenerator(invoiceReaderStub{invoice: invoice}, &rendererStub{}, store)
+
+	if err := generator.Generate(context.Background(), invoice.TenantID, invoice.ID); !errors.Is(err, ErrInvoiceSnapshotUnavailable) {
+		t.Fatalf("generate error = %v, want %v", err, ErrInvoiceSnapshotUnavailable)
+	}
+	if store.contents != nil {
+		t.Fatal("invoice without snapshot must not produce an artifact")
 	}
 }

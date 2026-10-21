@@ -396,8 +396,9 @@ Al final de cada sección, escribe un score: **X/Y** items cumplidos.
 - [ ] Crea directorio de storage si no existe
 - [ ] Polla outbox cada 3 segundos
 - [ ] Filtra solo eventos `invoice.issued`
-- [ ] Renderiza template HTML
-- [ ] Guarda artifact en {storagePath}/{tenantID}/{invoiceID}.html
+- [x] Captura snapshot versionado e inmutable al emitir la factura
+- [x] Renderiza PDF real exclusivamente desde el snapshot de emisión
+- [x] Guarda artifact PDF con clave determinista y tenant-scoped
 - [ ] Emite evento `pdf.generated` al outbox
 - [ ] Maneja graceful shutdown
 - [ ] Loggea errores pero no crashea

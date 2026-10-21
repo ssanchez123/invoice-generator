@@ -64,6 +64,10 @@ func (r *InvoiceRepository) Save(ctx context.Context, invoice *entity.Invoice) e
 
 // saveInvoiceTx upserts the invoice and its items within a transaction.
 func (r *InvoiceRepository) saveInvoiceTx(ctx context.Context, tx pgx.Tx, inv *entity.Invoice) error {
+	if err := r.prepareIssuedSnapshot(ctx, tx, inv); err != nil {
+		return err
+	}
+
 	// Marshal metadata to JSON; nil maps become '{}' not NULL (column is NOT NULL).
 	metadataJSON, err := json.Marshal(inv.Metadata)
 	if err != nil {
@@ -72,11 +76,18 @@ func (r *InvoiceRepository) saveInvoiceTx(ctx context.Context, tx pgx.Tx, inv *e
 	if string(metadataJSON) == "null" {
 		metadataJSON = []byte("{}")
 	}
+	var snapshotJSON []byte
+	if inv.IssuedSnapshot != nil {
+		snapshotJSON, err = json.Marshal(inv.IssuedSnapshot)
+		if err != nil {
+			return fmt.Errorf("marshal issued invoice snapshot: %w", err)
+		}
+	}
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO invoices (id, tenant_id, customer_id, number, status, issue_date, due_date,
-		                      currency, subtotal, tax_total, total, notes, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		                      currency, subtotal, tax_total, total, notes, metadata, issued_snapshot, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (id) DO UPDATE SET
 			status = EXCLUDED.status,
 			issue_date = EXCLUDED.issue_date,
@@ -86,12 +97,13 @@ func (r *InvoiceRepository) saveInvoiceTx(ctx context.Context, tx pgx.Tx, inv *e
 			total = EXCLUDED.total,
 			notes = EXCLUDED.notes,
 			metadata = EXCLUDED.metadata,
+			issued_snapshot = COALESCE(invoices.issued_snapshot, EXCLUDED.issued_snapshot),
 			updated_at = EXCLUDED.updated_at
 	`,
 		inv.ID, inv.TenantID, inv.CustomerID, inv.Number.Value, string(inv.Status),
 		inv.IssueDate, inv.DueDate, inv.Currency,
 		inv.Subtotal.Amount, inv.TaxTotal.Amount, inv.Total.Amount,
-		inv.Notes, metadataJSON, inv.CreatedAt, inv.UpdatedAt,
+		inv.Notes, metadataJSON, snapshotJSON, inv.CreatedAt, inv.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert invoice: %w", err)
@@ -118,6 +130,70 @@ func (r *InvoiceRepository) saveInvoiceTx(ctx context.Context, tx pgx.Tx, inv *e
 		}
 	}
 
+	return nil
+}
+
+func (r *InvoiceRepository) prepareIssuedSnapshot(ctx context.Context, tx pgx.Tx, inv *entity.Invoice) error {
+	var persistedStatus entity.InvoiceStatus
+	var persistedTenantID, persistedCustomerID string
+	var persistedSnapshot []byte
+	err := tx.QueryRow(ctx, `
+		SELECT status, tenant_id, customer_id, issued_snapshot
+		FROM invoices
+		WHERE id = $1
+		FOR UPDATE
+	`, inv.ID).Scan(&persistedStatus, &persistedTenantID, &persistedCustomerID, &persistedSnapshot)
+	if errors.Is(err, pgx.ErrNoRows) {
+		inv.IssuedSnapshot = nil
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("load invoice state before saving snapshot: %w", err)
+	}
+	if persistedTenantID != inv.TenantID || persistedCustomerID != inv.CustomerID {
+		return errors.New("invoice tenant and customer identity cannot be changed")
+	}
+	if len(persistedSnapshot) > 0 {
+		var snapshot entity.InvoiceSnapshot
+		if err := json.Unmarshal(persistedSnapshot, &snapshot); err != nil {
+			return fmt.Errorf("decode persisted invoice snapshot: %w", err)
+		}
+		inv.IssuedSnapshot = &snapshot
+		return nil
+	}
+	inv.IssuedSnapshot = nil
+	if persistedStatus != entity.InvoiceStatusDraft || inv.Status != entity.InvoiceStatusIssued {
+		return nil
+	}
+
+	var seller, customer entity.InvoicePartySnapshot
+	var sellerAddress, customerAddress []byte
+	err = tx.QueryRow(ctx, `
+		SELECT t.name, t.tax_id, t.address,
+		       c.name, c.email, c.phone, c.tax_id, c.address
+		FROM tenants t
+		JOIN customers c ON c.tenant_id = t.id
+		WHERE t.id = $1 AND c.id = $2
+		FOR SHARE OF t, c
+	`, persistedTenantID, persistedCustomerID).Scan(
+		&seller.Name, &seller.TaxID, &sellerAddress,
+		&customer.Name, &customer.Email, &customer.Phone, &customer.TaxID, &customerAddress,
+	)
+	if err != nil {
+		return fmt.Errorf("load seller and customer for invoice snapshot: %w", err)
+	}
+	if err := json.Unmarshal(sellerAddress, &seller.Address); err != nil {
+		return fmt.Errorf("decode seller address for invoice snapshot: %w", err)
+	}
+	if err := json.Unmarshal(customerAddress, &customer.Address); err != nil {
+		return fmt.Errorf("decode customer address for invoice snapshot: %w", err)
+	}
+
+	snapshot, err := entity.NewInvoiceSnapshot(inv, seller, customer)
+	if err != nil {
+		return fmt.Errorf("create issued invoice snapshot: %w", err)
+	}
+	inv.IssuedSnapshot = snapshot
 	return nil
 }
 
@@ -193,19 +269,19 @@ func (r *InvoiceRepository) FindByIDForUpdate(ctx context.Context, id string) (*
 	// Load invoice header with FOR UPDATE lock
 	var inv entity.Invoice
 	var number string
-	var metadata []byte
+	var metadata, snapshotJSON []byte
 	var issueDate *time.Time
 
 	err := tx.QueryRow(ctx, `
 		SELECT id, tenant_id, customer_id, number, status, issue_date, due_date,
-		       currency, subtotal, tax_total, total, notes, metadata, created_at, updated_at
+		       currency, subtotal, tax_total, total, notes, metadata, issued_snapshot, created_at, updated_at
 		FROM invoices WHERE id = $1 AND deleted_at IS NULL
 		FOR UPDATE
 	`, id).Scan(
 		&inv.ID, &inv.TenantID, &inv.CustomerID, &number,
 		&inv.Status, &issueDate, &inv.DueDate,
 		&inv.Currency, &inv.Subtotal.Amount, &inv.TaxTotal.Amount, &inv.Total.Amount,
-		&inv.Notes, &metadata, &inv.CreatedAt, &inv.UpdatedAt,
+		&inv.Notes, &metadata, &snapshotJSON, &inv.CreatedAt, &inv.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -221,6 +297,10 @@ func (r *InvoiceRepository) FindByIDForUpdate(ctx context.Context, id string) (*
 	inv.Number = valueobject.InvoiceNumber{Value: number}
 	if metadata != nil {
 		json.Unmarshal(metadata, &inv.Metadata)
+	}
+	inv.IssuedSnapshot, err = decodeInvoiceSnapshot(snapshotJSON)
+	if err != nil {
+		return nil, err
 	}
 
 	// Load items (no lock needed — items are only modified via the aggregate)
@@ -453,18 +533,18 @@ func (r *InvoiceRepository) FindOverdue(ctx context.Context, tenantID string, as
 func (r *InvoiceRepository) loadInvoice(ctx context.Context, conn *pgxpool.Conn, id string) (*entity.Invoice, error) {
 	var inv entity.Invoice
 	var number string
-	var metadata []byte
+	var metadata, snapshotJSON []byte
 	var issueDate *time.Time
 
 	err := conn.QueryRow(ctx, `
 		SELECT id, tenant_id, customer_id, number, status, issue_date, due_date,
-		       currency, subtotal, tax_total, total, notes, metadata, created_at, updated_at
+		       currency, subtotal, tax_total, total, notes, metadata, issued_snapshot, created_at, updated_at
 		FROM invoices WHERE id = $1 AND deleted_at IS NULL
 	`, id).Scan(
 		&inv.ID, &inv.TenantID, &inv.CustomerID, &number,
 		&inv.Status, &issueDate, &inv.DueDate,
 		&inv.Currency, &inv.Subtotal.Amount, &inv.TaxTotal.Amount, &inv.Total.Amount,
-		&inv.Notes, &metadata, &inv.CreatedAt, &inv.UpdatedAt,
+		&inv.Notes, &metadata, &snapshotJSON, &inv.CreatedAt, &inv.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -480,6 +560,10 @@ func (r *InvoiceRepository) loadInvoice(ctx context.Context, conn *pgxpool.Conn,
 	inv.Number = valueobject.InvoiceNumber{Value: number}
 	if metadata != nil {
 		json.Unmarshal(metadata, &inv.Metadata)
+	}
+	inv.IssuedSnapshot, err = decodeInvoiceSnapshot(snapshotJSON)
+	if err != nil {
+		return nil, err
 	}
 
 	// Load items
@@ -507,6 +591,17 @@ func (r *InvoiceRepository) loadInvoice(ctx context.Context, conn *pgxpool.Conn,
 	}
 
 	return &inv, rows.Err()
+}
+
+func decodeInvoiceSnapshot(encoded []byte) (*entity.InvoiceSnapshot, error) {
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	var snapshot entity.InvoiceSnapshot
+	if err := json.Unmarshal(encoded, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode issued invoice snapshot: %w", err)
+	}
+	return &snapshot, nil
 }
 
 // tenantCtxKey is the legacy context key for tenant_id.

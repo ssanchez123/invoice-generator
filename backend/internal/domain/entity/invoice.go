@@ -83,7 +83,8 @@ type Invoice struct {
 	IssueDate time.Time
 	DueDate   time.Time
 
-	Items []InvoiceItem
+	Items          []InvoiceItem
+	IssuedSnapshot *InvoiceSnapshot
 
 	Currency string
 	Subtotal valueobject.Money

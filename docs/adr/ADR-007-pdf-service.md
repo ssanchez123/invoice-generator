@@ -17,7 +17,7 @@ Options considered:
 
 The pdf-service:
 1. Subscribes to `InvoiceIssued` events via the relay
-2. Loads the tenant-scoped invoice, customer, and seller data
+2. Loads the invoice's immutable issue-time snapshot
 3. Renders a real PDF using the pure-Go `gofpdf` library
 4. Stores the PDF artifact using a deterministic tenant-scoped key in local storage or S3-compatible object storage
 5. Emits `PDFGenerated` only after the artifact has been persisted
@@ -25,6 +25,8 @@ The pdf-service:
 Development uses a local shared filesystem volume. S3 integration tests run against an in-process HTTP endpoint, so they need no AWS account, AWS charges, external service, or cloud credentials. Production requires S3-compatible storage and `PDF_STORAGE_BACKEND=s3`; AWS uses the SDK credential chain, while custom endpoints use explicit PDF-scoped credentials. Local filesystem storage is rejected when `ENVIRONMENT=production`.
 
 The API download endpoint verifies the invoice belongs to the authenticated tenant before retrieving the artifact. It returns 404 until asynchronous generation has completed.
+
+Invoice snapshots are created atomically with the `invoice.issued` transition and outbox event. The PDF worker never reads mutable customer or seller records. Previously issued invoices without snapshots are rejected rather than reconstructed from current data.
 
 ## Consequences
 - ✅ API service stays responsive (PDF work is offloaded)

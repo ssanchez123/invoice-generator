@@ -168,19 +168,6 @@ export const api = {
     return res
   },
 
-  register: (body: {
-    tenant_id: string
-    email: string
-    password: string
-    role?: string
-    first_name?: string
-    last_name?: string
-  }) =>
-    request<{ id: string; tenant_id: string; email: string; role: string }>('/auth/register', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
-
   // Invoices
   listInvoices: (params?: { status?: string; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams()

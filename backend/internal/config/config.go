@@ -15,7 +15,6 @@ type Config struct {
 	DBPassword  string
 	JWTSecret   string
 	JWTExpiry   string // e.g. "24h", "1h"
-	PDFStorage  string
 	Environment string
 }
 
@@ -35,7 +34,6 @@ func Load() (*Config, error) {
 		DBPassword:  getEnv("DB_PASSWORD", "invoicegen_dev"),
 		JWTSecret:   getEnv("JWT_SECRET", "dev-secret-change-in-production"),
 		JWTExpiry:   getEnv("JWT_EXPIRY", "24h"),
-		PDFStorage:  getEnv("PDF_STORAGE_PATH", "/tmp/pdfs"),
 		Environment: getEnv("ENVIRONMENT", "development"),
 	}
 

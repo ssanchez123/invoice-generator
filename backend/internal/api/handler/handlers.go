@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ type HandlerDeps struct {
 	ListPayments  *queryHandler.ListPaymentsHandler
 
 	CustomerRepo port.CustomerRepository
+	PDFStore     port.PDFArtifactStore
 }
 
 // deps is set by main.go via SetDeps(). In a real app, we'd use dependency injection.
@@ -241,8 +243,7 @@ func customerToDTO(c *entity.Customer) customerDTO {
 
 // AuthDeps holds auth-specific dependencies injected via SetAuthDeps().
 type AuthDeps struct {
-	Register *commandHandler.RegisterHandler
-	Login    *commandHandler.LoginHandler
+	Login *commandHandler.LoginHandler
 }
 
 // authDeps is set by main.go via SetAuthDeps().
@@ -312,71 +313,9 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Register creates a new user within a tenant.
-// POST /api/v1/auth/register
-func Register(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		TenantID  string `json:"tenant_id"`
-		Email     string `json:"email"`
-		Password  string `json:"password"`
-		Role      string `json:"role"`
-		FirstName string `json:"first_name"`
-		LastName  string `json:"last_name"`
-	}
-
-	if err := parseBody(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if req.TenantID == "" {
-		respondError(w, http.StatusBadRequest, "tenant_id is required")
-		return
-	}
-	if req.Email == "" {
-		respondError(w, http.StatusBadRequest, "email is required")
-		return
-	}
-	if req.Password == "" {
-		respondError(w, http.StatusBadRequest, "password is required")
-		return
-	}
-
-	cmd := commandHandler.RegisterCommand{
-		TenantID:  req.TenantID,
-		Email:     req.Email,
-		Password:  req.Password,
-		Role:      req.Role,
-		FirstName: req.FirstName,
-		LastName:  req.LastName,
-	}
-
-	user, err := authDeps.Register.Handle(r.Context(), cmd)
-	if err != nil {
-		switch {
-		case errors.Is(err, commandHandler.ErrEmailAlreadyExists):
-			respondError(w, http.StatusConflict, err.Error())
-		case errors.Is(err, commandHandler.ErrInvalidEmail),
-			errors.Is(err, commandHandler.ErrPasswordTooShort),
-			errors.Is(err, commandHandler.ErrInvalidRole),
-			errors.Is(err, commandHandler.ErrTenantNotFound):
-			respondError(w, http.StatusBadRequest, err.Error())
-		default:
-			status, msg := mapDomainError(err)
-			respondError(w, status, msg)
-		}
-		return
-	}
-
-	respondJSON(w, http.StatusCreated, map[string]any{
-		"id":         user.ID,
-		"tenant_id":  user.TenantID,
-		"email":      user.Email,
-		"role":       string(user.Role),
-		"first_name": user.FirstName,
-		"last_name":  user.LastName,
-		"created_at": user.CreatedAt,
-	})
+// RegisterDisabled rejects public registration until a trusted provisioning flow exists.
+func RegisterDisabled(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusForbidden, "public registration is disabled")
 }
 
 // ========== Invoices ==========
@@ -698,14 +637,47 @@ func ListPayments(w http.ResponseWriter, r *http.Request) {
 }
 
 func DownloadPDF(w http.ResponseWriter, r *http.Request) {
-	// GET /api/v1/invoices/:id/pdf — scaffold
 	id := chi.URLParam(r, "id")
-	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition", "attachment; filename=invoice-"+id+".pdf")
-	respondJSON(w, http.StatusOK, map[string]string{
-		"message":    "pdf download — scaffold",
-		"invoice_id": id,
+	tenantID, ok := mustTenantID(w, r)
+	if !ok {
+		return
+	}
+
+	invoice, err := deps.GetInvoice.Handle(r.Context(), queryHandler.GetInvoiceQuery{
+		InvoiceID: id,
+		TenantID:  tenantID,
 	})
+	if err != nil {
+		status, msg := mapDomainError(err)
+		respondError(w, status, msg)
+		return
+	}
+
+	if deps.PDFStore == nil {
+		log.Printf("PDF storage is not configured")
+		respondError(w, http.StatusServiceUnavailable, "PDF storage is unavailable")
+		return
+	}
+	contents, err := deps.PDFStore.GetInvoicePDF(r.Context(), tenantID, invoice.ID)
+	if err != nil {
+		if errors.Is(err, port.ErrPDFArtifactNotFound) {
+			respondError(w, http.StatusNotFound, "invoice PDF is not available")
+			return
+		}
+		log.Printf("failed to load PDF artifact for invoice %s: %v", invoice.ID, err)
+		respondError(w, http.StatusInternalServerError, "failed to load invoice PDF")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", "attachment; filename=invoice-"+invoice.ID+".pdf")
+	w.Header().Set("Content-Length", strconv.Itoa(len(contents)))
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(contents); err != nil {
+		log.Printf("failed to write PDF response for invoice %s: %v", invoice.ID, err)
+	}
 }
 
 // ========== Customers ==========

@@ -22,6 +22,7 @@ import (
 	"github.com/santiagossaa/invoice-generator/internal/config"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/auth"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
+	"github.com/santiagossaa/invoice-generator/internal/infrastructure/storage"
 )
 
 func main() {
@@ -44,7 +45,10 @@ func main() {
 	customerRepo := repository.NewCustomerRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
 	userRepo := repository.NewUserRepository(db)
-	tenantRepo := repository.NewTenantRepository(db)
+	pdfStore, err := storage.NewPDFArtifactStoreFromEnv(context.Background())
+	if err != nil {
+		log.Fatalf("failed to configure PDF storage: %v", err)
+	}
 
 	// Auth services
 	passwordHasher := auth.NewBcryptPasswordHasher()
@@ -77,15 +81,14 @@ func main() {
 		ListCustomers: listCustomersH,
 		ListPayments:  listPaymentsH,
 		CustomerRepo:  customerRepo,
+		PDFStore:      pdfStore,
 	})
 
 	// Auth handlers
-	registerH := command.NewRegisterHandler(userRepo, passwordHasher, tenantRepo)
 	loginH := command.NewLoginHandler(userRepo, passwordHasher, tokenService)
 
 	handler.SetAuthDeps(&handler.AuthDeps{
-		Register: registerH,
-		Login:    loginH,
+		Login: loginH,
 	})
 
 	// ========== HTTP Server ==========
@@ -102,14 +105,13 @@ func main() {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:5173"},
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Tenant-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key"},
 		ExposedHeaders:   []string{"X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
 
 	// Custom middleware
-	r.Use(apimiddleware.TenantContext)
 	r.Use(apimiddleware.Idempotency)
 
 	// Health check
@@ -135,12 +137,13 @@ func main() {
 		// Auth (no JWT required)
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/login", handler.Login)
-			r.Post("/register", handler.Register)
+			r.Post("/register", handler.RegisterDisabled)
 		})
 
 		// Protected routes
 		r.Group(func(r chi.Router) {
 			r.Use(apimiddleware.JWTAuth(tokenService))
+			r.Use(apimiddleware.TenantContext)
 
 			// Invoices
 			r.Post("/invoices", handler.CreateInvoice)

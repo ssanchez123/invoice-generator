@@ -25,12 +25,6 @@ const (
 func JWTAuth(tokenService port.TokenService) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip auth for public endpoints
-			if isPublicPath(r.URL.Path) {
-				next.ServeHTTP(w, r)
-				return
-			}
-
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
 				writeAuthError(w, "authorization required", http.StatusUnauthorized)
@@ -67,34 +61,16 @@ func JWTAuth(tokenService port.TokenService) func(next http.Handler) http.Handle
 	}
 }
 
-// TenantContext middleware ensures tenant_id is present in the context.
-// In the new auth flow, JWTAuth sets tenant_id from the JWT claims.
-// This middleware acts as a fallback: if JWTAuth didn't set tenant_id
-// (e.g., for public endpoints that still need it), it falls back to
-// the X-Tenant-ID header for backward compatibility during transition.
+// TenantContext requires a tenant ID set by JWTAuth.
 func TenantContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check if tenant_id was already set by JWTAuth
-		if _, ok := r.Context().Value(ctxkey.TenantIDKey).(string); ok {
-			next.ServeHTTP(w, r)
+		tenantID, ok := r.Context().Value(ctxkey.TenantIDKey).(string)
+		if !ok || strings.TrimSpace(tenantID) == "" {
+			writeAuthError(w, "valid tenant claim required", http.StatusUnauthorized)
 			return
 		}
 
-		// Skip for public endpoints
-		if isPublicPath(r.URL.Path) {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Fallback: check X-Tenant-ID header (backward compatibility / dev mode)
-		tenantID := r.Header.Get("X-Tenant-ID")
-		if tenantID == "" {
-			writeAuthError(w, "tenant_id required (provide via JWT token or X-Tenant-ID header)", http.StatusBadRequest)
-			return
-		}
-
-		ctx := context.WithValue(r.Context(), ctxkey.TenantIDKey, tenantID)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -156,19 +132,4 @@ func writeAuthError(w http.ResponseWriter, msg string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
-}
-
-func isPublicPath(path string) bool {
-	publicPaths := []string{
-		"/api/v1/auth/login",
-		"/api/v1/auth/register",
-		"/health",
-		"/swagger",
-	}
-	for _, p := range publicPaths {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
 }

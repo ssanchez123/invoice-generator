@@ -35,12 +35,9 @@ func generateTestToken(t *testing.T, ts *auth.JWTTokenService, tenantID, userID,
 }
 
 func TestTenantContext(t *testing.T) {
-	t.Run("sets tenant_id from header when no JWT context", func(t *testing.T) {
-		var capturedTenantID string
+	t.Run("does not trust tenant header without JWT context", func(t *testing.T) {
 		handler := apimiddleware.TenantContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if v, ok := r.Context().Value(apimiddleware.TenantIDKey).(string); ok {
-				capturedTenantID = v
-			}
+			t.Error("handler should not be called without a tenant claim")
 		}))
 
 		req := httptest.NewRequest("GET", "/api/v1/invoices", nil)
@@ -48,59 +45,26 @@ func TestTenantContext(t *testing.T) {
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
-		if capturedTenantID != "tenant-123" {
-			t.Errorf("tenant_id = %q, want tenant-123", capturedTenantID)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 		}
 	})
 
-	t.Run("rejects missing tenant_id on protected path", func(t *testing.T) {
+	t.Run("rejects missing tenant claim", func(t *testing.T) {
 		handler := apimiddleware.TenantContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			t.Error("handler should not be called for missing tenant_id")
+			t.Error("handler should not be called for missing tenant claim")
 		}))
 
 		req := httptest.NewRequest("GET", "/api/v1/invoices", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
 		}
 	})
 
-	t.Run("allows public path without tenant_id", func(t *testing.T) {
-		called := false
-		handler := apimiddleware.TenantContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
-		}))
-
-		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-
-		if !called {
-			t.Error("public path should pass through")
-		}
-		if w.Code != http.StatusOK {
-			t.Errorf("public path status = %d, want %d", w.Code, http.StatusOK)
-		}
-	})
-
-	t.Run("health is public", func(t *testing.T) {
-		called := false
-		handler := apimiddleware.TenantContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
-		}))
-
-		req := httptest.NewRequest("GET", "/health", nil)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-
-		if !called {
-			t.Error("health should pass through")
-		}
-	})
-
-	t.Run("preserves tenant_id from JWT context", func(t *testing.T) {
+	t.Run("accepts tenant_id from JWT context", func(t *testing.T) {
 		var capturedTenantID string
 		handler := apimiddleware.TenantContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if v, ok := r.Context().Value(apimiddleware.TenantIDKey).(string); ok {
@@ -202,21 +166,36 @@ func TestJWTAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("public path passes through without token", func(t *testing.T) {
-		authMiddleware := apimiddleware.JWTAuth(ts)
-		called := false
-		handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
-		}))
+}
 
-		req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
+func TestJWTAuthTenantContext(t *testing.T) {
+	ts := testTokenService()
+	token := generateTestToken(t, ts, "tenant-001", "user-001", "member")
 
-		if !called {
-			t.Error("public path should pass through without auth")
-		}
-	})
+	for _, tenantHeader := range []string{"", "tenant-from-untrusted-header"} {
+		t.Run("tenant header "+tenantHeader, func(t *testing.T) {
+			var capturedTenantID string
+			protected := apimiddleware.JWTAuth(ts)(apimiddleware.TenantContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedTenantID, _ = r.Context().Value(apimiddleware.TenantIDKey).(string)
+				w.WriteHeader(http.StatusNoContent)
+			})))
+
+			req := httptest.NewRequest("GET", "/api/v1/invoices", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+			if tenantHeader != "" {
+				req.Header.Set("X-Tenant-ID", tenantHeader)
+			}
+			w := httptest.NewRecorder()
+			protected.ServeHTTP(w, req)
+
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusNoContent, w.Body.String())
+			}
+			if capturedTenantID != "tenant-001" {
+				t.Errorf("tenant_id = %q, want tenant-001", capturedTenantID)
+			}
+		})
+	}
 }
 
 func TestRequireRole(t *testing.T) {
@@ -315,43 +294,6 @@ func TestIdempotency(t *testing.T) {
 			t.Error("POST with idempotency key should pass through (scaffold)")
 		}
 	})
-}
-
-func TestIsPublicPath(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"/api/v1/auth/login", true},
-		{"/api/v1/auth/register", true},
-		{"/health", true},
-		{"/api/v1/invoices", false},
-		{"/api/v1/customers", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			got := isPublicPathExported(tt.path)
-			if got != tt.want {
-				t.Errorf("isPublicPath(%q) = %v, want %v", tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
-// isPublicPathExported wraps the private isPublicPath for testing.
-func isPublicPathExported(path string) bool {
-	publicPaths := []string{
-		"/api/v1/auth/login",
-		"/api/v1/auth/register",
-		"/health",
-	}
-	for _, p := range publicPaths {
-		if len(path) >= len(p) && path[:len(p)] == p {
-			return true
-		}
-	}
-	return false
 }
 
 // Ensure unused import doesn't break

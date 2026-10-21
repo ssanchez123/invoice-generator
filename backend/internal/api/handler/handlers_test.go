@@ -8,10 +8,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
+
 	handler "github.com/santiagossaa/invoice-generator/internal/api/handler"
 	"github.com/santiagossaa/invoice-generator/internal/api/middleware"
 	commandHandler "github.com/santiagossaa/invoice-generator/internal/application/command"
 	queryHandler "github.com/santiagossaa/invoice-generator/internal/application/query"
+	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
 )
 
@@ -37,6 +40,122 @@ func setupDeps() {
 		CustomerRepo:  customerRepo,
 	}
 	handler.SetDeps(testDeps)
+}
+
+func TestRegisterDisabled(t *testing.T) {
+	req := httptest.NewRequest("POST", "/api/v1/auth/register", nil)
+	w := httptest.NewRecorder()
+
+	handler.RegisterDisabled(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("register status = %d, want %d", w.Code, http.StatusForbidden)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("public registration is disabled")) {
+		t.Errorf("response should explain registration is disabled; body: %s", w.Body.String())
+	}
+}
+
+type pdfStoreStub struct {
+	contents  []byte
+	err       error
+	reads     int
+	tenantID  string
+	invoiceID string
+}
+
+func (s *pdfStoreStub) PutInvoicePDF(_ context.Context, tenantID, invoiceID string, contents []byte) error {
+	s.tenantID, s.invoiceID, s.contents = tenantID, invoiceID, contents
+	return nil
+}
+
+func (s *pdfStoreStub) GetInvoicePDF(_ context.Context, tenantID, invoiceID string) ([]byte, error) {
+	s.tenantID, s.invoiceID = tenantID, invoiceID
+	s.reads++
+	return s.contents, s.err
+}
+
+func TestDownloadPDFServesTenantInvoiceArtifact(t *testing.T) {
+	setupDeps()
+	const tenantID = "tenant-001"
+	customer := repository.NewTestCustomer(tenantID)
+	if err := testDeps.CustomerRepo.Save(context.Background(), customer); err != nil {
+		t.Fatalf("seed customer: %v", err)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"customer_id": customer.ID,
+		"currency":    "USD",
+		"due_date":    "2026-12-31T23:59:59Z",
+		"items": []map[string]any{{
+			"description": "Consulting",
+			"quantity":    1,
+			"unit_price":  5000,
+		}},
+	})
+	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/invoices", bytes.NewReader(body))
+	createReq = tenantCtx(createReq, tenantID)
+	createW := httptest.NewRecorder()
+	handler.CreateInvoice(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("create invoice: status %d, body %s", createW.Code, createW.Body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(createW.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created invoice: %v", err)
+	}
+
+	store := &pdfStoreStub{contents: []byte("%PDF-test")}
+	testDeps.PDFStore = store
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/invoices/"+created.ID+"/pdf", nil)
+	req = tenantCtx(req, tenantID)
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("id", created.ID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	w := httptest.NewRecorder()
+
+	handler.DownloadPDF(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/pdf" {
+		t.Fatalf("Content-Type = %q, want application/pdf", got)
+	}
+	if !bytes.Equal(w.Body.Bytes(), store.contents) {
+		t.Fatalf("download body = %q, want %q", w.Body.Bytes(), store.contents)
+	}
+	if store.tenantID != tenantID || store.invoiceID != created.ID {
+		t.Fatalf("artifact lookup used tenant %q invoice %q", store.tenantID, store.invoiceID)
+	}
+
+	store.err = port.ErrPDFArtifactNotFound
+	pendingReq := httptest.NewRequest(http.MethodGet, "/api/v1/invoices/"+created.ID+"/pdf", nil)
+	pendingReq = tenantCtx(pendingReq, tenantID)
+	pendingRouteCtx := chi.NewRouteContext()
+	pendingRouteCtx.URLParams.Add("id", created.ID)
+	pendingReq = pendingReq.WithContext(context.WithValue(pendingReq.Context(), chi.RouteCtxKey, pendingRouteCtx))
+	pendingW := httptest.NewRecorder()
+	handler.DownloadPDF(pendingW, pendingReq)
+	if pendingW.Code != http.StatusNotFound {
+		t.Fatalf("unavailable PDF status = %d, want %d", pendingW.Code, http.StatusNotFound)
+	}
+
+	foreignReq := httptest.NewRequest(http.MethodGet, "/api/v1/invoices/"+created.ID+"/pdf", nil)
+	foreignReq = tenantCtx(foreignReq, "other-tenant")
+	foreignRouteCtx := chi.NewRouteContext()
+	foreignRouteCtx.URLParams.Add("id", created.ID)
+	foreignReq = foreignReq.WithContext(context.WithValue(foreignReq.Context(), chi.RouteCtxKey, foreignRouteCtx))
+	foreignW := httptest.NewRecorder()
+	handler.DownloadPDF(foreignW, foreignReq)
+	if foreignW.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant download status = %d, want %d", foreignW.Code, http.StatusNotFound)
+	}
+	if store.reads != 2 {
+		t.Fatalf("store read count = %d, want 2 (cross-tenant request must not read storage)", store.reads)
+	}
 }
 
 // tenantCtx returns a request with the tenant ID set in context, simulating middleware.

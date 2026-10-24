@@ -1,190 +1,336 @@
-import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { api, type Customer } from '../api'
+import { calculateItemTotals, dateAtEndOfLocalDay, formatMoney, localDateValue, parseAmountToMinorUnits } from '../format'
 
-interface LineItem {
+interface LineItemForm {
+  description: string
+  quantity: string
+  unitPrice: string
+  taxRateBps: number
+  discountPercent: string
+}
+
+interface InvoiceItemInput {
   description: string
   quantity: number
   unit_price: number
   tax_rate_bps: number
+  discount_bps: number
 }
 
-const CURRENCIES = ['USD', 'EUR', 'COP', 'MXN']
+const INITIAL_ITEM: LineItemForm = {
+  description: '',
+  quantity: '1',
+  unitPrice: '',
+  taxRateBps: 1900,
+  discountPercent: '0',
+}
+
 const TAX_RATES = [
-  { label: 'Exento (0%)', value: 0 },
-  { label: 'IVA 19% (CO)', value: 1900 },
-  { label: 'IVA 16% (MX)', value: 1600 },
-  { label: 'IVA 21% (ES)', value: 2100 },
-  { label: 'VAT 20% (EU)', value: 2000 },
+  { label: 'Sin impuesto · 0%', value: 0 },
+  { label: 'IVA · 5%', value: 500 },
+  { label: 'IVA · 19%', value: 1900 },
 ]
+
+function lineItemValues(item: LineItemForm) {
+  const quantity = Number(item.quantity)
+  const unitPrice = parseAmountToMinorUnits(item.unitPrice)
+  const discountPercent = Number(item.discountPercent)
+  if (
+    !Number.isSafeInteger(quantity) ||
+    quantity < 1 ||
+    unitPrice === null ||
+    !Number.isFinite(discountPercent) ||
+    discountPercent < 0 ||
+    discountPercent > 100
+  ) {
+    return null
+  }
+  return {
+    quantity,
+    unit_price: unitPrice,
+    tax_rate_bps: item.taxRateBps,
+    discount_bps: Math.round(discountPercent * 100),
+  }
+}
 
 export default function CreateInvoice() {
   const navigate = useNavigate()
+  const idempotency = useRef<{ signature: string; key: string } | null>(null)
   const [customers, setCustomers] = useState<Customer[]>([])
   const [customerId, setCustomerId] = useState('')
-  const [currency, setCurrency] = useState('USD')
+  const [currency, setCurrency] = useState('COP')
   const [dueDate, setDueDate] = useState('')
   const [notes, setNotes] = useState('')
-  const [items, setItems] = useState<LineItem[]>([
-    { description: '', quantity: 1, unit_price: 0, tax_rate_bps: 0 },
-  ])
+  const [items, setItems] = useState<LineItemForm[]>([{ ...INITIAL_ITEM }])
+  const [customersLoading, setCustomersLoading] = useState(true)
+  const [customersError, setCustomersError] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    api.listCustomers().then(res => {
-      setCustomers(res.data || [])
-      if (res.data && res.data.length > 0) setCustomerId(res.data[0].id)
-    }).catch(err => setError(err.message))
+    api.listCustomers({ limit: 100 }).then(result => {
+      const customerList = result.data || []
+      setCustomers(customerList)
+      if (customerList.length > 0) setCustomerId(customerList[0].id)
+    }).catch(err => {
+      setCustomersError(err instanceof Error ? err.message : 'No fue posible cargar los clientes.')
+    }).finally(() => setCustomersLoading(false))
   }, [])
 
-  const addItem = () => setItems([...items, { description: '', quantity: 1, unit_price: 0, tax_rate_bps: 0 }])
-  const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i))
-  const updateItem = (i: number, field: keyof LineItem, value: string | number) =>
-    setItems(items.map((it, idx) => idx === i ? { ...it, [field]: value } : it))
+  const totals = useMemo(() => items.reduce((sum, item) => {
+    const values = lineItemValues(item)
+    if (!values) return sum
+    const lineTotals = calculateItemTotals({
+      quantity: values.quantity,
+      unit_price: values.unit_price,
+      tax_rate_bps: values.tax_rate_bps,
+      discount_bps: values.discount_bps,
+    })
+    return {
+      subtotal: sum.subtotal + lineTotals.subtotal,
+      tax: sum.tax + lineTotals.tax,
+      total: sum.total + lineTotals.total,
+    }
+  }, { subtotal: 0, tax: 0, total: 0 }), [items])
 
-  const subtotal = items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0)
-  const taxTotal = items.reduce((sum, it) => {
-    const lineSub = it.quantity * it.unit_price
-    return sum + Math.round((lineSub * it.tax_rate_bps) / 10000)
-  }, 0)
+  const updateItem = (index: number, field: keyof LineItemForm, value: string | number) => {
+    setItems(current => current.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, [field]: value } : item,
+    ))
+  }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!customerId) { setError('Selecciona un cliente'); return }
-    if (!dueDate) { setError('Selecciona fecha de vencimiento'); return }
-    if (items.some(it => !it.description.trim())) { setError('Todos los items necesitan descripción'); return }
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setError('')
+
+    if (!customerId) {
+      setError('Selecciona un cliente antes de continuar.')
+      return
+    }
+    if (!dueDate) {
+      setError('Selecciona una fecha de vencimiento.')
+      return
+    }
+
+    const normalizedItems: (InvoiceItemInput | null)[] = items.map(item => {
+      const values = lineItemValues(item)
+      return values ? { description: item.description.trim(), ...values } : null
+    })
+    if (items.some(item => !item.description.trim())) {
+      setError('Agrega una descripción para cada producto o servicio.')
+      return
+    }
+    if (normalizedItems.some(item => item === null)) {
+      setError('Revisa cantidades, precios y descuentos. Usa precios con máximo dos decimales.')
+      return
+    }
+    const invoiceItems = normalizedItems.filter((item): item is InvoiceItemInput => item !== null)
+    if (invoiceItems.some(item => !Number.isSafeInteger(item.quantity * item.unit_price))) {
+      setError('El total de una línea supera el monto permitido.')
+      return
+    }
+
+    const body = {
+      customer_id: customerId,
+      currency,
+      due_date: dateAtEndOfLocalDay(dueDate),
+      items: invoiceItems,
+      notes: notes.trim() || undefined,
+    }
+    const signature = JSON.stringify(body)
+    if (idempotency.current?.signature !== signature) {
+      idempotency.current = { signature, key: crypto.randomUUID() }
+    }
 
     setSaving(true)
-    setError('')
     try {
-      const inv = await api.createInvoice({
-        customer_id: customerId,
-        currency,
-        due_date: new Date(dueDate + 'T23:59:59').toISOString(),
-        items: items.map(it => ({
-          description: it.description,
-          quantity: it.quantity,
-          unit_price: it.unit_price,
-          tax_rate_bps: it.tax_rate_bps,
-        })),
-        notes,
-      })
-      navigate(`/invoices/${inv.id}`)
+      const invoice = await api.createInvoice(body, idempotency.current.key)
+      idempotency.current = null
+      navigate(`/invoices/${invoice.id}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al crear factura')
+      setError(err instanceof Error ? err.message : 'No fue posible crear la factura.')
     } finally {
       setSaving(false)
     }
   }
 
-  const fieldStyle = { padding: '8px 12px', border: '1px solid #ddd', borderRadius: 6, fontSize: 14 }
-
   return (
-    <div>
-      <div className="page-header">
-        <h2>Nueva Factura</h2>
+    <section className="page page-narrow">
+      <div className="page-heading">
+        <div>
+          <span className="eyebrow">DOCUMENTO NUEVO</span>
+          <h1>Crear factura</h1>
+          <p className="page-description">Completa los datos para guardar un nuevo borrador.</p>
+        </div>
+        <Link to="/" className="button button-secondary">Cancelar</Link>
       </div>
-      <div className="card">
-        {error && <div style={{ color: '#c00', marginBottom: 16, padding: 12, background: '#fff0f0', borderRadius: 6 }}>{error}</div>}
-        <form onSubmit={handleSubmit} style={{ maxWidth: 'none' }}>
-          {/* Customer + currency + due date */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
-            <label>
-              <span>Cliente</span>
-              <select value={customerId} onChange={e => setCustomerId(e.target.value)} required style={fieldStyle}>
-                <option value="">Selecciona...</option>
-                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </label>
-            <label>
-              <span>Moneda</span>
-              <select value={currency} onChange={e => setCurrency(e.target.value)} style={fieldStyle}>
-                {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </label>
-            <label>
-              <span>Fecha de vencimiento</span>
-              <input type="date" min={new Date().toISOString().split('T')[0]} value={dueDate} onChange={e => setDueDate(e.target.value)} required style={fieldStyle} />
-            </label>
-          </div>
 
-          {/* Line items */}
-          <h3 style={{ marginTop: 24, marginBottom: 12 }}>Items</h3>
-          <div style={{ display: 'grid', gridTemplateColumns: '3fr 80px 140px 160px 40px', gap: 8, marginBottom: 8, fontSize: 12, fontWeight: 600, color: '#666', textTransform: 'uppercase' }}>
-            <span>Descripción</span>
-            <span>Cantidad</span>
-            <span>Precio unit. (cents)</span>
-            <span>Tasa de impuesto</span>
-            <span></span>
-          </div>
-          {items.map((item, i) => (
-            <div key={i} style={{ display: 'grid', gridTemplateColumns: '3fr 80px 140px 160px 40px', gap: 8, marginBottom: 8, alignItems: 'center' }}>
-              <input
-                placeholder="Descripción del producto/servicio"
-                value={item.description}
-                onChange={e => updateItem(i, 'description', e.target.value)}
-                style={fieldStyle}
-              />
-              <input
-                type="number"
-                min={1}
-                value={item.quantity}
-                onChange={e => updateItem(i, 'quantity', Number(e.target.value))}
-                style={{ ...fieldStyle, width: 80, textAlign: 'center' }}
-              />
-              <input
-                type="number"
-                min={0}
-                value={item.unit_price}
-                onChange={e => updateItem(i, 'unit_price', Number(e.target.value))}
-                style={{ ...fieldStyle, width: 140, textAlign: 'right' }}
-              />
-              <select
-                value={item.tax_rate_bps}
-                onChange={e => updateItem(i, 'tax_rate_bps', Number(e.target.value))}
-                style={{ ...fieldStyle, width: 160 }}
-              >
-                {TAX_RATES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
-              {items.length > 1 && (
-                <button type="button" onClick={() => removeItem(i)} style={{ background: '#cc0000', width: 40, padding: '8px 0' }}>×</button>
-              )}
-            </div>
-          ))}
-          <button type="button" onClick={addItem} style={{ background: '#666', marginTop: 4 }}>+ Agregar item</button>
-
-          {/* Totals */}
-          <div style={{ marginTop: 24, padding: 16, background: '#f9f9f9', borderRadius: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span>Subtotal:</span>
-              <span>{(subtotal / 100).toFixed(2)} {currency}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-              <span>Impuestos:</span>
-              <span>{(taxTotal / 100).toFixed(2)} {currency}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 4px', fontWeight: 700, borderTop: '1px solid #ddd', marginTop: 8 }}>
-              <span>Total:</span>
-              <span>{((subtotal + taxTotal) / 100).toFixed(2)} {currency}</span>
-            </div>
-          </div>
-
-          {/* Notes */}
-          <label style={{ marginTop: 16 }}>
-            <span>Notas (opcional)</span>
-            <input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notas internas..." style={fieldStyle} />
-          </label>
-
-          {/* Submit */}
-          <div style={{ marginTop: 24, display: 'flex', gap: 12 }}>
-            <button type="submit" disabled={saving} style={{ opacity: saving ? 0.6 : 1 }}>
-              {saving ? 'Creando...' : 'Crear Factura'}
-            </button>
-            <button type="button" onClick={() => navigate('/')} style={{ background: '#666' }}>Cancelar</button>
-          </div>
-        </form>
+      <div className="notice notice-warning">
+        <span className="notice-icon" aria-hidden="true">!</span>
+        <p>Los impuestos son valores de cálculo genéricos. Esta factura todavía no se transmite ni se valida ante la DIAN.</p>
       </div>
-    </div>
+
+      <section className="card form-card">
+        {error && <div className="alert alert-error" role="alert">{error}</div>}
+        {customersError && <div className="alert alert-error" role="alert">{customersError}</div>}
+
+        {!customersLoading && customers.length === 0 && !customersError ? (
+          <div className="empty-state">
+            <span className="empty-state-icon" aria-hidden="true">♙</span>
+            <h2>Primero agrega un cliente</h2>
+            <p>Necesitas asociar la factura a un cliente de tu espacio de trabajo.</p>
+            <Link to="/customers" className="button button-primary">Ir a clientes</Link>
+          </div>
+        ) : (
+          <form className="form-stack" onSubmit={handleSubmit}>
+            <div className="form-section">
+              <div className="form-section-heading">
+                <span className="step-number" aria-hidden="true">01</span>
+                <div><h2>Información general</h2><p>Asocia el documento y define sus condiciones.</p></div>
+              </div>
+              <div className="form-grid form-grid-three">
+                <label className="field">
+                  <span>Cliente <span className="required-mark">*</span></span>
+                  <select value={customerId} onChange={event => setCustomerId(event.target.value)} required disabled={customersLoading}>
+                    <option value="">{customersLoading ? 'Cargando clientes…' : 'Selecciona un cliente'}</option>
+                    {customers.map(customer => <option key={customer.id} value={customer.id}>{customer.name}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Moneda</span>
+                  <select value={currency} onChange={event => setCurrency(event.target.value)}>
+                    {['COP', 'USD', 'EUR', 'MXN'].map(code => <option key={code} value={code}>{code}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Vencimiento <span className="required-mark">*</span></span>
+                  <input
+                    type="date"
+                    value={dueDate}
+                    min={localDateValue()}
+                    onChange={event => setDueDate(event.target.value)}
+                    required
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="form-section">
+              <div className="form-section-heading">
+                <span className="step-number" aria-hidden="true">02</span>
+                <div><h2>Productos y servicios</h2><p>Los valores se calculan en unidades menores de la moneda seleccionada.</p></div>
+              </div>
+
+              <div className="line-items">
+                {items.map((item, index) => (
+                  <fieldset className="line-item" key={index}>
+                    <legend className="visually-hidden">Detalle {index + 1}</legend>
+                    <div className="line-item-top">
+                      <span className="line-item-label">LÍNEA {String(index + 1).padStart(2, '0')}</span>
+                      {items.length > 1 && (
+                        <button
+                          className="text-button danger-text"
+                          type="button"
+                          onClick={() => setItems(current => current.filter((_, itemIndex) => itemIndex !== index))}
+                          aria-label={`Eliminar línea ${index + 1}`}
+                        >
+                          Eliminar
+                        </button>
+                      )}
+                    </div>
+                    <div className="line-item-grid">
+                      <label className="field line-description">
+                        <span>Descripción <span className="required-mark">*</span></span>
+                        <input
+                          value={item.description}
+                          onChange={event => updateItem(index, 'description', event.target.value)}
+                          required
+                          maxLength={240}
+                          placeholder="Ej. Consultoría mensual"
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Cantidad</span>
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          inputMode="numeric"
+                          value={item.quantity}
+                          onChange={event => updateItem(index, 'quantity', event.target.value)}
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Precio unitario</span>
+                        <span className="input-with-prefix"><span>{currency}</span>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            inputMode="decimal"
+                            value={item.unitPrice}
+                            onChange={event => updateItem(index, 'unitPrice', event.target.value)}
+                            required
+                          />
+                        </span>
+                      </label>
+                      <label className="field">
+                        <span>Impuesto</span>
+                        <select
+                          value={item.taxRateBps}
+                          onChange={event => updateItem(index, 'taxRateBps', Number(event.target.value))}
+                        >
+                          {TAX_RATES.map(rate => <option key={rate.value} value={rate.value}>{rate.label}</option>)}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Descuento (%)</span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={item.discountPercent}
+                          onChange={event => updateItem(index, 'discountPercent', event.target.value)}
+                        />
+                      </label>
+                    </div>
+                  </fieldset>
+                ))}
+              </div>
+              <button className="button button-secondary add-line-button" type="button" onClick={() => setItems(current => [...current, { ...INITIAL_ITEM }])}>
+                <span aria-hidden="true">＋</span> Agregar línea
+              </button>
+            </div>
+
+            <div className="form-grid form-grid-two">
+              <label className="field">
+                <span>Notas internas <span className="optional-label">(opcional)</span></span>
+                <textarea value={notes} onChange={event => setNotes(event.target.value)} rows={3} maxLength={1000} placeholder="Información de referencia para tu equipo" />
+                <small>No aparecerán como validación ni soporte fiscal.</small>
+              </label>
+              <div className="totals-panel" aria-live="polite" aria-label="Resumen de valores">
+                <div><span>Subtotal</span><strong>{formatMoney(totals.subtotal, currency)}</strong></div>
+                <div><span>Impuestos</span><strong>{formatMoney(totals.tax, currency)}</strong></div>
+                <div className="grand-total"><span>Total estimado</span><strong>{formatMoney(totals.total, currency)}</strong></div>
+              </div>
+            </div>
+
+            <div className="form-actions">
+              <p><span className="required-mark">*</span> Campos obligatorios</p>
+              <div>
+                <Link to="/" className="button button-quiet">Cancelar</Link>
+                <button className="button button-primary" type="submit" disabled={saving || customersLoading || customers.length === 0}>
+                  {saving ? <><span className="spinner" aria-hidden="true" /> Guardando…</> : 'Guardar borrador'}
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+      </section>
+    </section>
   )
 }

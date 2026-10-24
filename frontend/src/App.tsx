@@ -1,5 +1,5 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { logout, getStoredUser } from './api'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { getStoredUser, logout } from './api'
 
 export default function App() {
   const navigate = useNavigate()
@@ -11,47 +11,72 @@ export default function App() {
   }
 
   return (
-    <div className="app-layout">
-      <nav className="sidebar">
-        <h1>InvoiceGen</h1>
-        <NavLink to="/" end className={({ isActive }) => isActive ? 'active' : ''}>
-          Facturas
-        </NavLink>
-        <NavLink to="/invoices/new" className={({ isActive }) => isActive ? 'active' : ''}>
-          Nueva Factura
-        </NavLink>
-        <NavLink to="/customers" className={({ isActive }) => isActive ? 'active' : ''}>
-          Clientes
-        </NavLink>
-        <a href="http://localhost:8080/swagger/" target="_blank" rel="noopener noreferrer" className="swagger-link">
-          📖 API Docs
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content">Saltar al contenido</a>
+
+      <aside className="sidebar" aria-label="Navegación principal">
+        <Link className="brand" to="/">
+          <span className="brand-mark" aria-hidden="true">i</span>
+          <span>
+            <strong>invoicegen</strong>
+            <small>Gestión de facturas</small>
+          </span>
+        </Link>
+
+        <div className="nav-section-label">ESPACIO DE TRABAJO</div>
+        <nav className="primary-nav">
+          <NavLink to="/" end className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            <span className="nav-icon" aria-hidden="true">▤</span>
+            <span>Facturas</span>
+          </NavLink>
+          <NavLink to="/invoices/new" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            <span className="nav-icon" aria-hidden="true">＋</span>
+            <span>Nueva factura</span>
+          </NavLink>
+          <NavLink to="/customers" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            <span className="nav-icon" aria-hidden="true">♙</span>
+            <span>Clientes</span>
+          </NavLink>
+        </nav>
+
+        <a className="api-docs-link" href="/swagger/" target="_blank" rel="noopener noreferrer">
+          <span aria-hidden="true">↗</span> Documentación API
         </a>
 
-        {user && (
-          <div style={{ marginTop: 'auto', paddingTop: 16, borderTop: '1px solid #e0e0e0' }}>
-            <div style={{ fontSize: 13, color: '#888', marginBottom: 8 }}>
-              {user.full_name}
-            </div>
-            <button
-              onClick={handleLogout}
-              style={{
-                width: '100%',
-                padding: '6px 12px',
-                fontSize: 13,
-                border: '1px solid #ddd',
-                borderRadius: 4,
-                background: 'white',
-                cursor: 'pointer',
-              }}
-            >
-              Cerrar sesión
-            </button>
+        <div className="sidebar-account">
+          <div className="avatar" aria-hidden="true">
+            {(user?.first_name?.[0] || user?.full_name?.[0] || 'U').toUpperCase()}
           </div>
-        )}
-      </nav>
-      <main className="main-content">
-        <Outlet />
-      </main>
+          <div className="account-copy">
+            <strong>{user?.full_name || 'Usuario'}</strong>
+            <span>{user?.email || ''}</span>
+          </div>
+          <button className="icon-button logout-button" onClick={handleLogout} aria-label="Cerrar sesión" title="Cerrar sesión">
+            <span aria-hidden="true">↪</span>
+          </button>
+        </div>
+      </aside>
+
+      <div className="workspace">
+        <header className="topbar">
+          <div className="topbar-context">
+            <span className="topbar-kicker">FACTURACIÓN</span>
+            <span className="topbar-divider" aria-hidden="true">/</span>
+            <span>Panel de trabajo</span>
+          </div>
+          <div className="topbar-account">
+            <span className="status-dot" aria-hidden="true" />
+            <span>Sesión activa</span>
+          </div>
+        </header>
+        <main id="main-content" className="main-content" tabIndex={-1}>
+          <Outlet />
+          <footer className="app-footer">
+            <span>InvoiceGen</span>
+            <span>La emisión interna no equivale a validación electrónica DIAN.</span>
+          </footer>
+        </main>
+      </div>
     </div>
   )
 }

@@ -1,14 +1,10 @@
-// API client for the invoice-generator backend.
-// All amounts are in minor units (cents). Tax rates in basis points (1900 = 19%).
-
-const API_BASE = '/api/v1'
-
-// ========== Token Management ==========
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '')
 
 const TOKEN_KEY = 'ig_access_token'
 const USER_KEY = 'ig_user'
+const EXPIRY_KEY = 'ig_token_expires_at'
 
-interface AuthUser {
+export interface AuthUser {
   id: string
   tenant_id: string
   email: string
@@ -25,98 +21,6 @@ interface LoginResponse {
   user: AuthUser
 }
 
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-function setToken(token: string, user: AuthUser): void {
-  localStorage.setItem(TOKEN_KEY, token)
-  localStorage.setItem(USER_KEY, JSON.stringify(user))
-}
-
-function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem(USER_KEY)
-}
-
-export function getStoredUser(): AuthUser | null {
-  const raw = localStorage.getItem(USER_KEY)
-  if (!raw) return null
-  try {
-    return JSON.parse(raw) as AuthUser
-  } catch {
-    return null
-  }
-}
-
-export function isAuthenticated(): boolean {
-  return getToken() !== null
-}
-
-export function logout(): void {
-  clearToken()
-}
-
-// ========== HTTP Helpers ==========
-
-function headers(extra: Record<string, string> = {}): HeadersInit {
-  const token = getToken()
-  const h: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...extra,
-  }
-  if (token) {
-    h['Authorization'] = `Bearer ${token}`
-  }
-  return h
-}
-
-async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...opts,
-    headers: headers(opts.headers as Record<string, string>),
-  })
-
-  // If token expired or invalid, clear it
-  if (res.status === 401) {
-    clearToken()
-    // Redirect to login if not already there
-    if (window.location.pathname !== '/login') {
-      window.location.href = '/login'
-    }
-  }
-
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`
-    try {
-      const body = await res.json()
-      msg = body.error || msg
-    } catch { /* not JSON */ }
-    throw new Error(msg)
-  }
-
-  if (res.status === 204) return undefined as T
-  return res.json()
-}
-
-// ========== Types ==========
-
-export interface Invoice {
-  id: string
-  number: string
-  customer_id: string
-  status: 'draft' | 'issued' | 'paid' | 'overdue' | 'cancelled'
-  issue_date: string | null
-  due_date: string
-  currency: string
-  subtotal: number
-  tax_total: number
-  total: number
-  notes: string
-  items?: InvoiceItem[]
-  created_at: string
-}
-
 export interface InvoiceItem {
   id: string
   description: string
@@ -124,7 +28,23 @@ export interface InvoiceItem {
   unit_price: number
   tax_rate_bps: number
   discount_bps: number
+  total?: number
+}
+
+export interface Invoice {
+  id: string
+  number: string
+  customer_id: string
+  status: 'draft' | 'issued' | 'paid' | 'overdue' | 'cancelled'
+  issue_date?: string | null
+  due_date: string
+  currency: string
+  subtotal: number
+  tax_total: number
   total: number
+  notes?: string
+  items?: InvoiceItem[]
+  created_at: string
 }
 
 export interface Customer {
@@ -155,67 +75,245 @@ export interface Payment {
   created_at: string
 }
 
-// ========== API ==========
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+function clearToken(): void {
+  sessionStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(USER_KEY)
+  sessionStorage.removeItem(EXPIRY_KEY)
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
+
+function getToken(): string | null {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+  const token = sessionStorage.getItem(TOKEN_KEY)
+  if (!token) return null
+
+  const expiresAt = Number(sessionStorage.getItem(EXPIRY_KEY))
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    clearToken()
+    return null
+  }
+
+  return token
+}
+
+export function getStoredUser(): AuthUser | null {
+  if (!getToken()) return null
+  const raw = sessionStorage.getItem(USER_KEY)
+  if (!raw) return null
+
+  try {
+    const user: unknown = JSON.parse(raw)
+    if (isAuthUser(user)) {
+      return user
+    }
+  } catch {
+    clearToken()
+  }
+  clearToken()
+  return null
+}
+
+function isAuthUser(user: unknown): user is AuthUser {
+  return typeof user === 'object' && user !== null &&
+    'id' in user && typeof user.id === 'string' &&
+    'tenant_id' in user && typeof user.tenant_id === 'string' &&
+    'email' in user && typeof user.email === 'string' &&
+    'role' in user && typeof user.role === 'string' &&
+    'first_name' in user && typeof user.first_name === 'string' &&
+    'last_name' in user && typeof user.last_name === 'string' &&
+    'full_name' in user && typeof user.full_name === 'string'
+}
+
+function isLoginResponse(response: unknown): response is LoginResponse {
+  return typeof response === 'object' && response !== null &&
+    'access_token' in response && typeof response.access_token === 'string' && response.access_token.trim().length > 0 &&
+    'token_type' in response && typeof response.token_type === 'string' && response.token_type.trim().length > 0 &&
+    'expires_in' in response && typeof response.expires_in === 'number' && Number.isFinite(response.expires_in) && response.expires_in > 0 &&
+    'user' in response && isAuthUser(response.user)
+}
+
+export function isAuthenticated(): boolean {
+  return getToken() !== null
+}
+
+export function logout(): void {
+  clearToken()
+}
+
+function saveSession(response: LoginResponse): void {
+  sessionStorage.setItem(TOKEN_KEY, response.access_token)
+  sessionStorage.setItem(USER_KEY, JSON.stringify(response.user))
+  sessionStorage.setItem(
+    EXPIRY_KEY,
+    String(Date.now() + response.expires_in * 1000),
+  )
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
+
+function requestHeaders(extra?: HeadersInit, hasBody = false): Headers {
+  const headers = new Headers(extra)
+  headers.set('Accept', 'application/json')
+  if (hasBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  return headers
+}
+
+async function errorMessage(response: Response): Promise<string> {
+  try {
+    const body: unknown = await response.json()
+    if (typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string') {
+      return body.error
+    }
+  } catch {
+    // Fall through to the status-based message for non-JSON error responses.
+  }
+  return `Error de solicitud (${response.status})`
+}
+
+async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: requestHeaders(options.headers, Boolean(options.body)),
+  })
+
+  if (response.status === 401) {
+    clearToken()
+    if (window.location.pathname !== '/login' && path !== '/auth/login') {
+      window.location.assign('/login')
+    }
+  }
+
+  if (!response.ok) {
+    throw new ApiError(await errorMessage(response), response.status)
+  }
+  if (response.status === 204) return undefined as T
+  return response.json() as Promise<T>
+}
+
+export async function downloadInvoicePDF(invoiceId: string): Promise<void> {
+  const headers = requestHeaders()
+  headers.set('Accept', 'application/pdf')
+  const response = await fetch(`${API_BASE}/invoices/${encodeURIComponent(invoiceId)}/pdf`, {
+    headers,
+  })
+
+  if (response.status === 401) {
+    clearToken()
+    if (window.location.pathname !== '/login') window.location.assign('/login')
+  }
+  if (!response.ok) {
+    throw new ApiError(await errorMessage(response), response.status)
+  }
+
+  const blob = await response.blob()
+  const disposition = response.headers.get('Content-Disposition')
+  const filename = disposition?.match(/filename="?([^";]+)"?/i)?.[1] ?? `invoice-${invoiceId}.pdf`
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  link.click()
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000)
+}
 
 export const api = {
-  // Auth
   login: async (tenantId: string, email: string, password: string): Promise<LoginResponse> => {
-    const res = await request<LoginResponse>('/auth/login', {
+    const response: unknown = await request<unknown>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ tenant_id: tenantId, email, password }),
     })
-    setToken(res.access_token, res.user)
-    return res
+    if (!isLoginResponse(response)) {
+      throw new ApiError('La respuesta de autenticación no tiene un formato válido.', 502)
+    }
+    saveSession(response)
+    return response
   },
 
-  // Invoices
-  listInvoices: (params?: { status?: string; limit?: number; offset?: number }) => {
-    const qs = new URLSearchParams()
-    if (params?.status) qs.set('status', params.status)
-    if (params?.limit) qs.set('limit', String(params.limit))
-    if (params?.offset) qs.set('offset', String(params.offset))
-    const q = qs.toString()
-    return request<{ data: Invoice[]; total: number }>(`/invoices${q ? '?' + q : ''}`)
+  listInvoices: (params: { status?: string; customer_id?: string; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams()
+    if (params.status) query.set('status', params.status)
+    if (params.customer_id) query.set('customer_id', params.customer_id)
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return request<{ data: Invoice[]; total: number }>(`/invoices${suffix}`)
   },
 
-  getInvoice: (id: string) =>
-    request<Invoice>(`/invoices/${id}`),
+  getInvoice: (id: string) => request<Invoice>(`/invoices/${encodeURIComponent(id)}`),
 
-  createInvoice: (body: {
-    customer_id: string
-    currency: string
-    due_date: string
-    items: { description: string; quantity: number; unit_price: number; tax_rate_bps: number; discount_bps?: number }[]
-    notes?: string
-  }) =>
+  createInvoice: (
+    body: {
+      customer_id: string
+      currency: string
+      due_date: string
+      items: {
+        description: string
+        quantity: number
+        unit_price: number
+        tax_rate_bps: number
+        discount_bps?: number
+      }[]
+      notes?: string
+    },
+    idempotencyKey: string = crypto.randomUUID(),
+  ) =>
     request<Invoice>('/invoices', {
       method: 'POST',
       body: JSON.stringify(body),
-      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      headers: { 'Idempotency-Key': idempotencyKey },
     }),
 
   issueInvoice: (id: string) =>
-    request<Invoice>(`/invoices/${id}/issue`, { method: 'POST' }),
+    request<Invoice>(`/invoices/${encodeURIComponent(id)}/issue`, { method: 'POST' }),
 
   cancelInvoice: (id: string) =>
-    request<Invoice>(`/invoices/${id}/cancel`, { method: 'POST' }),
+    request<{ status: string }>(`/invoices/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
 
-  // Payments
   listPayments: (invoiceId: string) =>
-    request<{ data: Payment[] }>(`/invoices/${invoiceId}/payments`),
+    request<{ data: Payment[] }>(`/invoices/${encodeURIComponent(invoiceId)}/payments`),
 
-  recordPayment: (invoiceId: string, body: { amount: number; currency: string; method: string; reference?: string }) =>
-    request<Payment>(`/invoices/${invoiceId}/payments`, {
+  recordPayment: (
+    invoiceId: string,
+    body: { amount: number; currency: string; method: string; reference?: string },
+    idempotencyKey: string = crypto.randomUUID(),
+  ) =>
+    request<Payment>(`/invoices/${encodeURIComponent(invoiceId)}/payments`, {
       method: 'POST',
       body: JSON.stringify(body),
-      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      headers: { 'Idempotency-Key': idempotencyKey },
     }),
 
-  // Customers
-  listCustomers: () =>
-    request<{ data: Customer[] }>('/customers'),
+  listCustomers: (params: { limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams()
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return request<{ data: Customer[] }>(`/customers${suffix}`)
+  },
 
-  createCustomer: (body: { name: string; email?: string; phone?: string; tax_id?: string; address?: Partial<Customer['address']> }) =>
+  getCustomer: (id: string) => request<Customer>(`/customers/${encodeURIComponent(id)}`),
+
+  createCustomer: (body: {
+    name: string
+    email?: string
+    phone?: string
+    tax_id?: string
+    address?: Partial<Customer['address']>
+  }) =>
     request<Customer>('/customers', {
       method: 'POST',
       body: JSON.stringify(body),

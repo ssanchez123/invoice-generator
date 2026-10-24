@@ -43,6 +43,8 @@ Thumbs.db
 # Coverage
 coverage.out
 coverage.html
+playwright-report/
+test-results/
 
 # Local data
 pgdata/

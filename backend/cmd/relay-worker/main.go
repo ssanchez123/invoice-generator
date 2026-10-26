@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/santiagossaa/invoice-generator/internal/application/outbox"
+	"github.com/santiagossaa/invoice-generator/internal/config"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
 )
 
@@ -33,8 +34,11 @@ type EventHandler interface {
 func main() {
 	log.Println("relay-worker starting...")
 
-	dbURL := repository.DatabaseURL()
-	db, err := repository.NewDB(context.Background(), dbURL)
+	cfg, err := config.LoadDatabaseConfig()
+	if err != nil {
+		log.Fatalf("failed to load database config: %v", err)
+	}
+	db, err := repository.NewDB(context.Background(), cfg.DatabaseURL())
 	if err != nil {
 		log.Fatalf("failed to connect to db: %v", err)
 	}

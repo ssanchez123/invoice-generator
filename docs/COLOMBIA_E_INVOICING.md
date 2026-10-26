@@ -56,6 +56,8 @@ Referencias de implementación revisadas: `backend/internal/domain/entity/invoic
 6. Implementar notas crédito/débito como documentos fiscales relacionados con la factura original; no reutilizar `cancelled` como sustituto de una nota electrónica.
 7. Evaluar primero un proveedor concreto con sandbox, autorización DIAN vigente, soporte de versión de anexo, callbacks/consulta de estado, idempotencia, exportación de XML y respuestas, retención, seguridad, continuidad, SLA, portabilidad y proceso de salida.
 
+La diligencia de DATAICO y The Factory HKA y el contrato interno propuesto están documentados en [`docs/DIAN_PROVIDER_INTEGRATION_GUIDE.md`](DIAN_PROVIDER_INTEGRATION_GUIDE.md). La especificación privada de cada proveedor sigue pendiente; no se deben inventar endpoints ni iniciar transmisión real hasta recibirla y validarla.
+
 ## UX y riesgos operativos del nicho
 
 - El usuario debe distinguir claramente borrador, envío pendiente, validada, rechazada y contingencia; el estado de pago es un eje distinto.

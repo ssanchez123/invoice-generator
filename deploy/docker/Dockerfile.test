@@ -1,0 +1,24 @@
+# Dockerfile.test — Multi-stage build for running integration tests
+# Uses the same Go image as the backend, runs tests against a real PostgreSQL
+
+FROM golang:1.27.3-alpine AS test-runner
+
+RUN apk add --no-cache git
+
+WORKDIR /app
+
+# Copy go.mod and go.sum first for caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Copy migrations into the container
+COPY migrations /app/migrations
+
+# Ensure code compiles (including integration tag)
+RUN go build -tags integration ./...
+
+# Default command runs the integration tests
+CMD ["go", "test", "-tags=integration", "-v", "-count=1", "-timeout=300s", "./internal/infrastructure/repository/integration/..."]

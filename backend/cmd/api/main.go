@@ -20,6 +20,7 @@ import (
 	"github.com/santiagossaa/invoice-generator/internal/application/command"
 	"github.com/santiagossaa/invoice-generator/internal/application/query"
 	"github.com/santiagossaa/invoice-generator/internal/config"
+	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/auth"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/storage"
@@ -33,7 +34,7 @@ func main() {
 
 	// ========== Dependency Wiring ==========
 	// Connect to database
-	db, err := repository.NewDB(context.Background(), repository.DatabaseURL())
+	db, err := repository.NewDB(context.Background(), cfg.DatabaseURL())
 	if err != nil {
 		log.Fatalf("failed to connect to db: %v", err)
 	}
@@ -45,6 +46,7 @@ func main() {
 	customerRepo := repository.NewCustomerRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
 	userRepo := repository.NewUserRepository(db)
+	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	pdfStore, err := storage.NewPDFArtifactStoreFromEnv(context.Background())
 	if err != nil {
 		log.Fatalf("failed to configure PDF storage: %v", err)
@@ -53,7 +55,8 @@ func main() {
 	// Auth services
 	passwordHasher := auth.NewBcryptPasswordHasher()
 	tokenService := auth.NewJWTTokenService(auth.JWTConfig{
-		Secret: cfg.JWTSecret,
+		Secret:      cfg.JWTSecret,
+		TokenExpiry: cfg.JWTExpiry,
 	})
 
 	// Application layer handlers (CQRS)
@@ -96,6 +99,7 @@ func main() {
 
 	// Standard middleware
 	r.Use(middleware.RequestID)
+	r.Use(apimiddleware.CaptureClientAddress)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -103,7 +107,7 @@ func main() {
 
 	// CORS
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173"},
+		AllowedOrigins:   cfg.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key"},
 		ExposedHeaders:   []string{"X-Request-ID"},
@@ -111,14 +115,16 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Custom middleware
-	r.Use(apimiddleware.Idempotency)
-
-	// Health check
+	// Liveness and dependency readiness
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+	r.Get("/health/live", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok"}`))
+	})
+	r.Get("/health/ready", handler.ReadinessHandler(db))
 
 	// Swagger UI — interactive API docs at /swagger/*
 	r.Get("/swagger/*", httpSwagger.Handler(
@@ -136,39 +142,11 @@ func main() {
 	r.Route("/api/v1", func(r chi.Router) {
 		// Auth (no JWT required)
 		r.Route("/auth", func(r chi.Router) {
-			r.Post("/login", handler.Login)
+			r.With(apimiddleware.LoginRateLimit(cfg.LoginRateLimit, cfg.LoginRateWindow)).Post("/login", handler.Login)
 			r.Post("/register", handler.RegisterDisabled)
 		})
 
-		// Protected routes
-		r.Group(func(r chi.Router) {
-			r.Use(apimiddleware.JWTAuth(tokenService))
-			r.Use(apimiddleware.TenantContext)
-
-			// Invoices
-			r.Post("/invoices", handler.CreateInvoice)
-			r.Get("/invoices", handler.ListInvoices)
-			r.Get("/invoices/{id}", handler.GetInvoice)
-			r.Patch("/invoices/{id}", handler.UpdateInvoice)
-			r.Post("/invoices/{id}/issue", handler.IssueInvoice)
-			r.Post("/invoices/{id}/cancel", handler.CancelInvoice)
-			r.Post("/invoices/{id}/payments", handler.RecordPayment)
-			r.Get("/invoices/{id}/payments", handler.ListPayments)
-			r.Get("/invoices/{id}/pdf", handler.DownloadPDF)
-
-			// Customers
-			r.Post("/customers", handler.CreateCustomer)
-			r.Get("/customers", handler.ListCustomers)
-			r.Get("/customers/{id}", handler.GetCustomer)
-
-			// Subscriptions
-			r.Post("/subscriptions", handler.CreateSubscription)
-			r.Get("/subscriptions", handler.ListSubscriptions)
-			r.Delete("/subscriptions/{id}", handler.CancelSubscription)
-
-			// Audit
-			r.Get("/audit", handler.ListAuditEntries)
-		})
+		registerProtectedRoutes(r, tokenService, idempotencyRepo)
 	})
 
 	srv := &http.Server{
@@ -196,4 +174,34 @@ func main() {
 	defer cancel()
 	srv.Shutdown(ctx)
 	log.Println("server stopped")
+}
+
+func registerProtectedRoutes(r chi.Router, tokenService port.TokenService, idempotencyRepo port.IdempotencyRepository) {
+	readRoles := apimiddleware.RequireAnyRole("admin", "member", "viewer")
+	memberRole := apimiddleware.RequireRole("member")
+
+	r.Group(func(r chi.Router) {
+		r.Use(apimiddleware.JWTAuth(tokenService))
+		r.Use(apimiddleware.TenantContext)
+
+		r.With(memberRole, apimiddleware.Idempotency(idempotencyRepo)).Post("/invoices", handler.CreateInvoice)
+		r.With(readRoles).Get("/invoices", handler.ListInvoices)
+		r.With(readRoles).Get("/invoices/{id}", handler.GetInvoice)
+		r.With(memberRole).Patch("/invoices/{id}", handler.UpdateInvoice)
+		r.With(memberRole, apimiddleware.Idempotency(idempotencyRepo)).Post("/invoices/{id}/issue", handler.IssueInvoice)
+		r.With(memberRole, apimiddleware.Idempotency(idempotencyRepo)).Post("/invoices/{id}/cancel", handler.CancelInvoice)
+		r.With(memberRole, apimiddleware.Idempotency(idempotencyRepo)).Post("/invoices/{id}/payments", handler.RecordPayment)
+		r.With(readRoles).Get("/invoices/{id}/payments", handler.ListPayments)
+		r.With(readRoles).Get("/invoices/{id}/pdf", handler.DownloadPDF)
+
+		r.With(memberRole, apimiddleware.Idempotency(idempotencyRepo)).Post("/customers", handler.CreateCustomer)
+		r.With(readRoles).Get("/customers", handler.ListCustomers)
+		r.With(readRoles).Get("/customers/{id}", handler.GetCustomer)
+
+		r.With(memberRole).Post("/subscriptions", handler.CreateSubscription)
+		r.With(readRoles).Get("/subscriptions", handler.ListSubscriptions)
+		r.With(memberRole).Delete("/subscriptions/{id}", handler.CancelSubscription)
+
+		r.With(apimiddleware.RequireRole("admin")).Get("/audit", handler.ListAuditEntries)
+	})
 }

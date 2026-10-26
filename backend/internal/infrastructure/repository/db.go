@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -128,21 +127,4 @@ func (db *DB) TenantConn(ctx context.Context, tenantID string) (*pgxpool.Conn, e
 // Ping checks database connectivity.
 func (db *DB) Ping(ctx context.Context) error {
 	return db.pool.Ping(ctx)
-}
-
-// DatabaseURL builds a PostgreSQL connection URL from environment variables.
-func DatabaseURL() string {
-	host := getEnv("DB_HOST", "localhost")
-	port := getEnv("DB_PORT", "5432")
-	name := getEnv("DB_NAME", "invoicegen")
-	user := getEnv("DB_USER", "invoicegen")
-	password := getEnv("DB_PASSWORD", "invoicegen_dev")
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, password, host, port, name)
-}
-
-func getEnv(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }

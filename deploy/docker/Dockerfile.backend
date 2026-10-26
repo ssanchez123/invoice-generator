@@ -1,5 +1,5 @@
 # Backend API service
-FROM golang:1.25-alpine AS builder
+FROM golang:1.27.3-alpine AS builder
 
 WORKDIR /app
 
@@ -20,6 +20,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /bin/outbox-ops ./cmd/outbox-ops
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata postgresql-client
+RUN addgroup -S -g 10001 app && adduser -S -D -H -u 10001 -G app app \
+    && mkdir -p /var/pdfs \
+    && chown -R app:app /var/pdfs
 
 COPY --from=builder /bin/api /usr/local/bin/api
 COPY --from=builder /bin/relay-worker /usr/local/bin/relay-worker
@@ -28,7 +31,9 @@ COPY --from=builder /bin/outbox-ops /usr/local/bin/outbox-ops
 COPY --from=builder /app/migrations /migrations
 COPY --from=builder /app/docs /docs
 COPY migrate.sh /usr/local/bin/migrate.sh
-RUN chmod +x /usr/local/bin/migrate.sh
+RUN chmod 755 /usr/local/bin/migrate.sh
+
+USER 10001:10001
 
 EXPOSE 8080
 

@@ -4,6 +4,7 @@
 *.so
 *.dylib
 *.test
+!deploy/docker/Dockerfile.test
 *.out
 vendor/
 

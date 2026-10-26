@@ -99,7 +99,7 @@ See `docs/adr/` for detailed Architecture Decision Records.
 POST   /api/v1/invoices           — Create invoice (idempotent)
 GET    /api/v1/invoices           — List (paginated, filtered)
 GET    /api/v1/invoices/:id      — Get detail
-PATCH  /api/v1/invoices/:id      — Update (draft only)
+PATCH  /api/v1/invoices/:id      — Disabled (501 until implemented)
 POST   /api/v1/invoices/:id/issue — Issue (draft → issued)
 POST   /api/v1/invoices/:id/cancel — Cancel
 POST   /api/v1/invoices/:id/payments — Record payment
@@ -109,11 +109,11 @@ POST   /api/v1/customers          — Create customer
 GET    /api/v1/customers           — List
 GET    /api/v1/customers/:id       — Get detail
 
-POST   /api/v1/subscriptions       — Create recurring billing
-GET    /api/v1/subscriptions       — List
-DELETE /api/v1/subscriptions/:id  — Cancel subscription
+POST   /api/v1/subscriptions       — Disabled (501 until recurring rules exist)
+GET    /api/v1/subscriptions       — Disabled (501)
+DELETE /api/v1/subscriptions/:id  — Disabled (501)
 
-GET    /api/v1/audit               — Audit trail (filtered)
+GET    /api/v1/audit               — Disabled (501 until writes and queries exist)
 
 POST   /api/v1/auth/login          — Login (JWT)
 ```

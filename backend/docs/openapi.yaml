@@ -2,8 +2,8 @@ openapi: 3.0.3
 info:
   title: Invoice Generator API
   description: |
-    SaaS-ready invoice generator with multi-tenancy, multi-currency,
-    jurisdiction-aware tax rules, recurring billing, and PDF generation.
+    Multi-tenant invoice management API with PDF generation. This project is
+    not production-ready and does not issue DIAN-validated electronic invoices.
 
     ## Architecture
     - Hexagonal Architecture (Ports & Adapters)
@@ -16,9 +16,10 @@ info:
     Obtain a token via `POST /api/v1/auth/login`.
 
     ## Idempotency
-    POST endpoints that create or modify state support the `Idempotency-Key` header.
-    Provide a unique key (e.g., UUID) to safely retry requests without side effects.
-    Cached responses are returned for duplicate keys within a 24-hour window.
+    Enabled state-changing POST endpoints accept the `Idempotency-Key` header.
+    Matching requests replay the original response for 24 hours; reusing a key
+    with a different request or while the first request is processing returns 409.
+    Keys are optional; clients should provide a unique key when retrying writes.
   version: 1.0.0
   contact:
     name: Santiago SSAA
@@ -69,6 +70,27 @@ paths:
                   status:
                     type: string
                     example: ok
+
+  /health/live:
+    get:
+      tags: [Health]
+      summary: Liveness
+      security: []
+      responses:
+        '200':
+          description: Process is running
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness
+      description: Checks PostgreSQL connectivity. No authentication required.
+      security: []
+      responses:
+        '200':
+          description: Dependencies are ready
+        '503':
+          description: A critical dependency is unavailable
 
   /api/v1/auth/register:
     post:
@@ -197,27 +219,13 @@ paths:
           $ref: '#/components/responses/NotFound'
     patch:
       tags: [Invoices]
-      summary: Update invoice (draft only)
-      description: Only invoices in draft status can be modified.
+      summary: Update invoice (unavailable)
+      description: This endpoint is disabled until draft update behavior is implemented.
       parameters:
         - $ref: '#/components/parameters/InvoiceId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/UpdateInvoiceRequest'
       responses:
-        '200':
-          description: Updated invoice
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Invoice'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '409':
-          description: Invoice is not in draft status
+        '501':
+          $ref: '#/components/responses/NotImplemented'
 
   /api/v1/invoices/{id}/issue:
     post:
@@ -229,6 +237,7 @@ paths:
         Issue date must not be after the due date.
       parameters:
         - $ref: '#/components/parameters/InvoiceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '200':
           description: Invoice issued
@@ -237,7 +246,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Invoice'
         '409':
-          description: Invalid status transition or no items or issue after due date
+          description: Invalid state transition or idempotency conflict
 
   /api/v1/invoices/{id}/cancel:
     post:
@@ -246,6 +255,7 @@ paths:
       description: Cancels an invoice (from draft or issued status).
       parameters:
         - $ref: '#/components/parameters/InvoiceId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
         '200':
           description: Invoice cancelled
@@ -254,7 +264,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Invoice'
         '409':
-          description: Cannot cancel (paid or already cancelled)
+          description: Cannot cancel or idempotency conflict
 
   /api/v1/invoices/{id}/payments:
     post:
@@ -337,6 +347,8 @@ paths:
     post:
       tags: [Customers]
       summary: Create customer
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -395,43 +407,22 @@ paths:
   /api/v1/subscriptions:
     post:
       tags: [Subscriptions]
-      summary: Create subscription
-      description: Creates a recurring billing subscription for a customer.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateSubscriptionRequest'
+      summary: Create subscription (unavailable)
+      description: Subscription endpoints are disabled until recurring billing rules are implemented.
       responses:
-        '201':
-          description: Subscription created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Subscription'
-        '400':
-          $ref: '#/components/responses/BadRequest'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
     get:
       tags: [Subscriptions]
-      summary: List subscriptions
+      summary: List subscriptions (unavailable)
       responses:
-        '200':
-          description: List of subscriptions
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Subscription'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
 
   /api/v1/subscriptions/{id}:
     delete:
       tags: [Subscriptions]
-      summary: Cancel subscription
+      summary: Cancel subscription (unavailable)
       parameters:
         - name: id
           in: path
@@ -440,16 +431,14 @@ paths:
             type: string
             format: uuid
       responses:
-        '204':
-          description: Subscription cancelled
-        '404':
-          $ref: '#/components/responses/NotFound'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
 
   /api/v1/audit:
     get:
       tags: [Audit]
-      summary: Query audit trail
-      description: Returns immutable audit entries filtered by entity type and ID.
+      summary: Query audit trail (unavailable)
+      description: The audit API is disabled until writes and tenant-scoped queries are implemented.
       parameters:
         - name: entity_type
           in: query
@@ -464,17 +453,8 @@ paths:
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
-        '200':
-          description: Audit entries
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/AuditEntry'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
 
 components:
   securitySchemes:
@@ -531,6 +511,12 @@ components:
             $ref: '#/components/schemas/Error'
     NotFound:
       description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotImplemented:
+      description: This endpoint is not available
       content:
         application/json:
           schema:

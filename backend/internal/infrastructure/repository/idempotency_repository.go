@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -20,62 +19,93 @@ func NewIdempotencyRepository(db *DB) *IdempotencyRepository {
 	return &IdempotencyRepository{db: db}
 }
 
-// Get retrieves a cached idempotency response by key.
-func (r *IdempotencyRepository) Get(ctx context.Context, key string) (*port.IdempotencyRecord, error) {
-	tenantID, ok := TenantIDFromCtx(ctx)
-	if !ok {
-		return nil, errors.New("tenant_id not in context")
-	}
-
-	conn, err := r.db.TenantConn(ctx, tenantID)
+func (r *IdempotencyRepository) Reserve(ctx context.Context, record *port.IdempotencyRecord) (*port.IdempotencyRecord, bool, error) {
+	tx, err := r.db.TenantTx(ctx, record.TenantID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	defer conn.Release()
+	defer tx.Rollback(ctx)
 
-	var record port.IdempotencyRecord
-	var expiresAt time.Time
-
-	err = conn.QueryRow(ctx, `
-		SELECT key, tenant_id, response_body, status, expires_at
-		FROM idempotency_records
-		WHERE key = $1 AND tenant_id = $2 AND expires_at > NOW()
-	`, key, tenantID).Scan(
-		&record.Key, &record.TenantID, &record.ResponseBody,
-		&record.Status, &expiresAt,
-	)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil // No cached response = proceed with request
+	reserved, err := scanIdempotencyRecord(tx.QueryRow(ctx, `
+		INSERT INTO idempotency_records
+			(key, tenant_id, request_hash, state, response_body, response_headers, status, expires_at)
+		VALUES ($1, $2, $3, 'processing', NULL, '{}'::jsonb, 0, $4)
+		ON CONFLICT (key, tenant_id) DO UPDATE
+		SET request_hash = EXCLUDED.request_hash,
+			state = 'processing',
+			response_body = NULL,
+			response_headers = '{}'::jsonb,
+			status = 0,
+			expires_at = EXCLUDED.expires_at,
+			created_at = NOW()
+		WHERE idempotency_records.expires_at <= NOW()
+		RETURNING key, tenant_id, request_hash, state, response_body, response_headers, status, expires_at
+	`, record.Key, record.TenantID, record.RequestHash, record.ExpiresAt))
+	if err == nil {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, fmt.Errorf("commit idempotency reservation: %w", err)
 		}
-		return nil, fmt.Errorf("get idempotency: %w", err)
+		return reserved, true, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, fmt.Errorf("reserve idempotency key: %w", err)
 	}
 
-	record.ExpiresAt = expiresAt
-	return &record, nil
+	existing, err := scanIdempotencyRecord(tx.QueryRow(ctx, `
+		SELECT key, tenant_id, request_hash, state, response_body, response_headers, status, expires_at
+		FROM idempotency_records
+		WHERE key = $1 AND tenant_id = $2
+	`, record.Key, record.TenantID))
+	if err != nil {
+		return nil, false, fmt.Errorf("read idempotency key: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, fmt.Errorf("commit idempotency lookup: %w", err)
+	}
+	return existing, false, nil
 }
 
-// Save stores an idempotency response with a TTL (default 24 hours).
-func (r *IdempotencyRepository) Save(ctx context.Context, record *port.IdempotencyRecord) error {
-	conn, err := r.db.TenantConn(ctx, record.TenantID)
+func (r *IdempotencyRepository) Complete(ctx context.Context, record *port.IdempotencyRecord) error {
+	tx, err := r.db.TenantTx(ctx, record.TenantID)
 	if err != nil {
 		return err
 	}
-	defer conn.Release()
+	defer tx.Rollback(ctx)
 
-	_, err = conn.Exec(ctx, `
-		INSERT INTO idempotency_records (key, tenant_id, response_body, status, expires_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (key, tenant_id) DO NOTHING
-	`,
-		record.Key, record.TenantID, record.ResponseBody,
-		record.Status, record.ExpiresAt,
-	)
+	result, err := tx.Exec(ctx, `
+		UPDATE idempotency_records
+		SET state = 'completed',
+			response_body = $4,
+			response_headers = $5::jsonb,
+			status = $6,
+			expires_at = $7
+		WHERE key = $1 AND tenant_id = $2 AND request_hash = $3 AND state = 'processing'
+	`, record.Key, record.TenantID, record.RequestHash, record.ResponseBody,
+		string(record.ResponseHeaders), record.Status, record.ExpiresAt)
 	if err != nil {
-		return fmt.Errorf("save idempotency: %w", err)
+		return fmt.Errorf("complete idempotency response: %w", err)
 	}
-
+	if result.RowsAffected() != 1 {
+		return errors.New("idempotency reservation was not found")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit idempotency response: %w", err)
+	}
 	return nil
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanIdempotencyRecord(row rowScanner) (*port.IdempotencyRecord, error) {
+	var record port.IdempotencyRecord
+	err := row.Scan(&record.Key, &record.TenantID, &record.RequestHash, &record.State,
+		&record.ResponseBody, &record.ResponseHeaders, &record.Status, &record.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return &record, nil
 }
 
 var _ port.IdempotencyRepository = (*IdempotencyRepository)(nil)

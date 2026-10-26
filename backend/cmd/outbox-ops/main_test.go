@@ -22,3 +22,31 @@ func TestRunValidatesReplayArgumentsBeforeConnecting(t *testing.T) {
 		t.Fatal("expected invalid tenant UUID error")
 	}
 }
+
+func TestValidateOperatorDatabaseURLRequiresTLSInProduction(t *testing.T) {
+	tests := []struct {
+		name        string
+		databaseURL string
+		wantErr     bool
+	}{
+		{name: "verified TLS", databaseURL: "postgres://user:pass@db.example.com:5432/invoicegen?sslmode=verify-full"},
+		{name: "required TLS", databaseURL: "postgres://user:pass@db.example.com:5432/invoicegen?sslmode=require"},
+		{name: "TLS disabled", databaseURL: "postgres://user:pass@db.example.com:5432/invoicegen?sslmode=disable", wantErr: true},
+		{name: "TLS mode missing", databaseURL: "postgres://user:pass@db.example.com:5432/invoicegen", wantErr: true},
+		{name: "invalid URL", databaseURL: "not-a-database-url", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateOperatorDatabaseURL(test.databaseURL, "production")
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateOperatorDatabaseURLAllowsLocalDevelopment(t *testing.T) {
+	if err := validateOperatorDatabaseURL("postgres://user:pass@localhost:5432/invoicegen?sslmode=disable", "development"); err != nil {
+		t.Fatalf("development URL should be allowed: %v", err)
+	}
+}

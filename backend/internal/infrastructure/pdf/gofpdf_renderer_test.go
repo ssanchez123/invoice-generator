@@ -17,8 +17,8 @@ func TestGoFPDFRendererProducesPDF(t *testing.T) {
 			Version:   entity.InvoiceSnapshotVersion,
 			InvoiceID: "invoice-1",
 			Number:    "INV-2026-001",
-			IssueDate: time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC),
-			DueDate:   time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC),
+			IssueDate: time.Date(2026, 5, 20, 17, 0, 0, 0, time.UTC),
+			DueDate:   time.Date(2026, 6, 20, 17, 0, 0, 0, time.UTC),
 			Currency:  "COP",
 			Subtotal:  20000,
 			TaxTotal:  3800,
@@ -26,7 +26,7 @@ func TestGoFPDFRendererProducesPDF(t *testing.T) {
 			Notes:     "Gracias por su compra.",
 			Seller: entity.InvoicePartySnapshot{
 				Name:    "Compañía de Prueba",
-				TaxID:   "NIT 123",
+				TaxID:   "900123456-7",
 				Address: valueobject.Address{Line1: "Calle 10", City: "Bogotá", Country: "CO"},
 			},
 			Customer: entity.InvoicePartySnapshot{
@@ -63,7 +63,19 @@ func TestGoFPDFRendererRequiresInvoiceData(t *testing.T) {
 }
 
 func TestFormatBasisPoints(t *testing.T) {
-	if got := formatBasisPoints(1900); got != "19.00%" {
-		t.Fatalf("formatBasisPoints(1900) = %q, want 19.00%%", got)
+	if got := formatBasisPoints(1900); got != "19,00 %" {
+		t.Fatalf("formatBasisPoints(1900) = %q, want 19,00 %%", got)
+	}
+}
+
+func TestColombianFormatting(t *testing.T) {
+	if got := formatColombianMoney(123456789, "cop"); got != "COP 1.234.567,89" {
+		t.Fatalf("formatColombianMoney() = %q, want COP 1.234.567,89", got)
+	}
+	if got := formatColombianMoney(-12345, "COP"); got != "COP -123,45" {
+		t.Fatalf("formatColombianMoney() with negative amount = %q, want COP -123,45", got)
+	}
+	if got := formatColombianDate(time.Date(2026, 5, 20, 17, 0, 0, 0, time.UTC)); got != "20/05/2026" {
+		t.Fatalf("formatColombianDate() = %q, want 20/05/2026", got)
 	}
 }

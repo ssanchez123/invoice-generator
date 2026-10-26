@@ -12,27 +12,28 @@ Options considered:
 - **Idempotency-Key header** — standard pattern (Stripe-style), explicit and robust
 
 ## Decision
-**Idempotency-Key header on all POST endpoints that create or modify state.**
+**Idempotency-Key header on enabled state-changing POST endpoints.** The header is optional, but clients must reuse it to safely retry a write.
 
 ### Mechanism
-1. Client sends `Idempotency-Key: <uuid>` header on POST
-2. Server checks `idempotency_records` table for existing key within TTL window (24h)
-3. If found: return cached response (same status + body)
-4. If not found: process request, store `{key, tenant_id, response_hash, status, expires_at}` in same TX
-5. Subsequent retries with same key return cached response
+1. The API hashes the method, request URI, content type, and body.
+2. It atomically reserves `(tenant_id, key)` in `idempotency_records` before running the handler.
+3. A completed matching request replays the original status, headers, and body for 24 hours.
+4. Reusing a key with a different request, or while its first request is processing, returns `409`.
+5. The completed response is persisted after the handler returns. A crash between the business transaction and response persistence leaves a processing reservation, which blocks duplicate execution until expiry.
 
 ### Scope
 Applied to:
 - `POST /invoices` — prevent duplicate invoices
+- `POST /invoices/:id/issue` and `/cancel` — prevent duplicate transitions
 - `POST /invoices/:id/payments` — prevent double payments
-- `POST /subscriptions` — prevent duplicate subscriptions
+- `POST /customers` — prevent duplicate customer creation
 
 Not applied to GET (inherently idempotent) or PUT/PATCH (idempotent by nature).
 
 ## Consequences
-- ✅ Clients can retry safely on network errors
-- ✅ Prevents double-charging on payment endpoints
+- ✅ Completed requests can be replayed without repeating the operation
+- ✅ Concurrent matching requests cannot both execute while the reservation is active
 - ✅ Standard pattern, familiar to API consumers
-- ⚠️ Extra DB write per request (in same TX, minimal cost)
-- ⚠️ TTL cleanup needed for expired records
+- ⚠️ The business write and idempotency response are not committed in one transaction; processing reservations require operational care after crashes
+- ⚠️ Expired keys can be reused after 24 hours
 - ⚠️ Must document for API consumers

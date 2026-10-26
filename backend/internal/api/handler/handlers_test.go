@@ -328,34 +328,28 @@ func TestCreateCustomerValidation(t *testing.T) {
 	}
 }
 
-// TestCreateSubscriptionEndpoint tests POST /api/v1/subscriptions (scaffold).
-func TestCreateSubscriptionEndpoint(t *testing.T) {
-	setupDeps()
-
-	reqBody := map[string]any{
-		"customer_id":       "cust-001",
-		"frequency":         "monthly",
-		"next_billing_date": "2024-09-01",
-		"items": []map[string]any{
-			{
-				"description":  "SaaS Subscription",
-				"quantity":     1,
-				"unit_price":   9900,
-				"tax_rate_bps": 1900,
-			},
-		},
+func TestUnsupportedHandlersReturnNotImplemented(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{name: "invoice update", handler: handler.UpdateInvoice},
+		{name: "subscription create", handler: handler.CreateSubscription},
+		{name: "subscription list", handler: handler.ListSubscriptions},
+		{name: "subscription cancel", handler: handler.CancelSubscription},
+		{name: "audit list", handler: handler.ListAuditEntries},
 	}
-	body, _ := json.Marshal(reqBody)
-
-	req := httptest.NewRequest("POST", "/api/v1/subscriptions", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = tenantCtx(req, "tenant-001")
-
-	w := httptest.NewRecorder()
-	handler.CreateSubscription(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Errorf("create subscription status = %d, want %d", w.Code, http.StatusCreated)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			test.handler(w, httptest.NewRequest(http.MethodPost, "/", nil))
+			if w.Code != http.StatusNotImplemented {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusNotImplemented, w.Body.String())
+			}
+			if !bytes.Contains(w.Body.Bytes(), []byte(`"error"`)) {
+				t.Fatalf("response should contain an explicit error: %s", w.Body.String())
+			}
+		})
 	}
 }
 

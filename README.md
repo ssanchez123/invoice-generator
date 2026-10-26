@@ -28,7 +28,7 @@ and the transactional outbox pattern.
 
 ## Overview
 
-Invoice Generator is a production-grade backend system designed to demonstrate **real-world system design** — not a toy CRUD app. It models a multi-tenant SaaS where each tenant manages customers, invoices, payments, subscriptions, and audit trails with strict isolation enforced at the database level.
+Invoice Generator is a multi-tenant invoicing application and system-design project. It is not yet production-ready and does not issue DIAN-validated electronic invoices.
 
 The focus is on **backend engineering**: domain modeling, separation of concerns, event-driven architecture, testability, and operational readiness. The frontend is intentionally minimal — a clean React SPA to exercise the API.
 
@@ -39,12 +39,12 @@ The focus is on **backend engineering**: domain modeling, separation of concerns
 | 🏢 **Multi-tenancy** | Row-Level Security (RLS) at the PostgreSQL level — defense-in-depth tenant isolation |
 | 💰 **Multi-currency** | Integer-based Money (no floating-point bugs), ISO 4217 compliant |
 | 🧾 **Jurisdiction-aware tax** | Tax rules per country/region, resolved per invoice line |
-| 🔁 **Recurring billing** | Subscriptions with daily/weekly/monthly/yearly frequencies |
+| 🔁 **Recurring billing** | Planned; subscription endpoints explicitly return `501 Not Implemented` |
 | ⚡ **CQRS** | Separate command (write) and query (read) handlers with independent evolution paths |
 | 📨 **Domain Events + Outbox** | Reliable async processing via the transactional outbox pattern |
 | 📄 **PDF generation** | Separate microservice for CPU-bound PDF rendering |
-| 🔑 **Idempotency keys** | Safe retries on POST endpoints (Stripe-style) |
-| 📋 **Audit trail** | Immutable, insert-only event log per tenant |
+| 🔑 **Idempotency keys** | Durable tenant-scoped response replay for keyed state-changing POST requests |
+| 📋 **Audit trail** | Storage schema exists; the audit API remains disabled until writes and queries are implemented |
 | 🔢 **Invoice numbering** | Tenant-scoped sequential, gap-resistant via DB sequences |
 | 🗑️ **Soft deletes** | Never hard-delete — preserve audit integrity |
 | 🔐 **JWT authentication** | Bearer token auth with tenant-scoped context (scaffold) |
@@ -189,20 +189,19 @@ invoice-generator/
 | `POST` | `/api/v1/invoices` | Create invoice (idempotent) |
 | `GET` | `/api/v1/invoices` | List invoices (paginated, filterable) |
 | `GET` | `/api/v1/invoices/:id` | Get invoice detail |
-| `PATCH` | `/api/v1/invoices/:id` | Update invoice (draft only, scaffold) |
+| `PATCH` | `/api/v1/invoices/:id` | Not available (`501`) |
 | `POST` | `/api/v1/invoices/:id/issue` | Issue invoice |
 | `POST` | `/api/v1/invoices/:id/cancel` | Cancel invoice |
 | `POST` | `/api/v1/invoices/:id/payments` | Record payment (idempotent) |
 | `GET` | `/api/v1/invoices/:id/payments` | List payments for invoice |
-| `GET` | `/api/v1/invoices/:id/pdf` | Download PDF (scaffold) |
+| `GET` | `/api/v1/invoices/:id/pdf` | Download generated PDF |
 | `POST` | `/api/v1/customers` | Create customer |
 | `GET` | `/api/v1/customers` | List customers (paginated) |
 | `GET` | `/api/v1/customers/:id` | Get customer detail |
-| `POST` | `/api/v1/subscriptions` | Create subscription (scaffold) |
-| `GET` | `/api/v1/subscriptions` | List subscriptions (scaffold) |
-| `DELETE` | `/api/v1/subscriptions/:id` | Cancel subscription (scaffold) |
-| `GET` | `/api/v1/audit` | Query audit trail (scaffold) |
-| `GET` | `/healthz` | Health check |
+| `POST` / `GET` / `DELETE` | `/api/v1/subscriptions...` | Not available (`501`) |
+| `GET` | `/api/v1/audit` | Not available (`501`) |
+| `GET` | `/health` or `/health/live` | Liveness |
+| `GET` | `/health/ready` | Readiness; checks PostgreSQL |
 
 Full specification: [docs/openapi.yaml](docs/openapi.yaml)
 
@@ -256,16 +255,17 @@ cd backend && go test -v ./internal/domain/entity/...
 | [OpenAPI Spec](docs/openapi.yaml) | API specification (import to Swagger/Postman) |
 | [ADRs](docs/adr/) | 10 Architecture Decision Records |
 | [Local Setup](LOCAL_SETUP.md) | Detailed local development instructions |
+| [Production operations](docs/operations/production-readiness.md) | Configuration contract, authorization, readiness, and backup/restore verification |
 
 ## Roadmap
 
-- [ ] JWT-based authentication (full implementation)
+- [ ] Trusted user provisioning, password recovery, and session revocation
 - [ ] Email notifications via SMTP/SendGrid
 - [ ] Webhook delivery for domain events
-- [ ] Rate limiting middleware
 - [ ] Prometheus metrics + Grafana dashboards
 - [ ] Kubernetes deployment manifests
-- [ ] End-to-end Playwright tests
+- [ ] DIAN technology-provider integration and fiscal validation flow
+- [ ] Recurring subscriptions and audit API implementation
 - [ ] Internationalization (i18n) for frontend
 
 ## Contributing

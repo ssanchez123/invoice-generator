@@ -115,17 +115,19 @@ type OutboxEntry struct {
 
 // IdempotencyRepository is the port for idempotency key storage.
 type IdempotencyRepository interface {
-	// Get retrieves a cached response by key.
-	Get(ctx context.Context, key string) (*IdempotencyRecord, error)
-
-	// Save stores a response with a TTL.
-	Save(ctx context.Context, record *IdempotencyRecord) error
+	// Reserve atomically claims a key or returns the existing record.
+	Reserve(ctx context.Context, record *IdempotencyRecord) (*IdempotencyRecord, bool, error)
+	// Complete stores the response for a previously reserved key.
+	Complete(ctx context.Context, record *IdempotencyRecord) error
 }
 
 type IdempotencyRecord struct {
-	Key          string
-	TenantID     string
-	ResponseBody []byte
-	Status       int
-	ExpiresAt    time.Time
+	Key             string
+	TenantID        string
+	RequestHash     string
+	State           string
+	ResponseBody    []byte
+	ResponseHeaders []byte
+	Status          int
+	ExpiresAt       time.Time
 }

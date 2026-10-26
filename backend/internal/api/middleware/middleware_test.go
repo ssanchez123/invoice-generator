@@ -4,10 +4,15 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	apimiddleware "github.com/santiagossaa/invoice-generator/internal/api/middleware"
+	"github.com/santiagossaa/invoice-generator/internal/ctxkey"
 	"github.com/santiagossaa/invoice-generator/internal/domain/entity"
+	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/auth"
 )
 
@@ -248,10 +253,82 @@ func TestRequireRole(t *testing.T) {
 	})
 }
 
+func TestRequireAnyRole(t *testing.T) {
+	for _, test := range []struct {
+		role       string
+		wantStatus int
+	}{
+		{role: "admin", wantStatus: http.StatusNoContent},
+		{role: "member", wantStatus: http.StatusNoContent},
+		{role: "viewer", wantStatus: http.StatusNoContent},
+		{role: "unknown", wantStatus: http.StatusForbidden},
+	} {
+		t.Run(test.role, func(t *testing.T) {
+			handler := apimiddleware.RequireAnyRole("admin", "member", "viewer")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			ctx := context.WithValue(context.Background(), apimiddleware.UserRoleKey, test.role)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx))
+			if w.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, test.wantStatus)
+			}
+		})
+	}
+}
+
+type memoryIdempotencyRepository struct {
+	mu      sync.Mutex
+	records map[string]*port.IdempotencyRecord
+}
+
+func newMemoryIdempotencyRepository() *memoryIdempotencyRepository {
+	return &memoryIdempotencyRepository{records: make(map[string]*port.IdempotencyRecord)}
+}
+
+func idempotencyRecordKey(record *port.IdempotencyRecord) string {
+	return record.TenantID + ":" + record.Key
+}
+
+func cloneIdempotencyRecord(record *port.IdempotencyRecord) *port.IdempotencyRecord {
+	clone := *record
+	clone.ResponseBody = append([]byte(nil), record.ResponseBody...)
+	clone.ResponseHeaders = append([]byte(nil), record.ResponseHeaders...)
+	return &clone
+}
+
+func (r *memoryIdempotencyRepository) Reserve(_ context.Context, record *port.IdempotencyRecord) (*port.IdempotencyRecord, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := idempotencyRecordKey(record)
+	if existing, ok := r.records[key]; ok {
+		return cloneIdempotencyRecord(existing), false, nil
+	}
+	claimed := cloneIdempotencyRecord(record)
+	claimed.State = "processing"
+	r.records[key] = claimed
+	return cloneIdempotencyRecord(claimed), true, nil
+}
+
+func (r *memoryIdempotencyRepository) Complete(_ context.Context, record *port.IdempotencyRecord) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := idempotencyRecordKey(record)
+	r.records[key] = cloneIdempotencyRecord(record)
+	return nil
+}
+
+func idempotencyRequest(method, path, tenantID, key, body string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Idempotency-Key", key)
+	ctx := context.WithValue(req.Context(), ctxkey.TenantIDKey, tenantID)
+	return req.WithContext(ctx)
+}
+
 func TestIdempotency(t *testing.T) {
 	t.Run("non-POST passes through", func(t *testing.T) {
 		called := false
-		handler := apimiddleware.Idempotency(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := apimiddleware.Idempotency(newMemoryIdempotencyRepository())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true
 		}))
 
@@ -266,7 +343,7 @@ func TestIdempotency(t *testing.T) {
 
 	t.Run("POST without key passes through", func(t *testing.T) {
 		called := false
-		handler := apimiddleware.Idempotency(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler := apimiddleware.Idempotency(newMemoryIdempotencyRepository())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true
 		}))
 
@@ -279,22 +356,110 @@ func TestIdempotency(t *testing.T) {
 		}
 	})
 
-	t.Run("POST with key passes through (scaffold)", func(t *testing.T) {
-		called := false
-		handler := apimiddleware.Idempotency(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			called = true
+	t.Run("same key and payload replays the original response", func(t *testing.T) {
+		repo := newMemoryIdempotencyRepository()
+		calls := 0
+		handler := apimiddleware.Idempotency(repo)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Location", "/api/v1/invoices/invoice-1")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"invoice-1"}`))
 		}))
 
-		req := httptest.NewRequest("POST", "/api/v1/invoices", nil)
-		req.Header.Set("Idempotency-Key", "key-123")
+		first := httptest.NewRecorder()
+		handler.ServeHTTP(first, idempotencyRequest(http.MethodPost, "/api/v1/invoices", "tenant-1", "key-123", `{"customer_id":"customer-1"}`))
+		second := httptest.NewRecorder()
+		handler.ServeHTTP(second, idempotencyRequest(http.MethodPost, "/api/v1/invoices", "tenant-1", "key-123", `{"customer_id":"customer-1"}`))
+
+		if calls != 1 {
+			t.Fatalf("handler called %d times, want 1", calls)
+		}
+		if second.Code != http.StatusCreated || second.Body.String() != first.Body.String() ||
+			second.Header().Get("Location") != "/api/v1/invoices/invoice-1" {
+			t.Fatalf("replayed response differs: status=%d body=%q headers=%v", second.Code, second.Body.String(), second.Header())
+		}
+	})
+
+	t.Run("same key with a different payload conflicts", func(t *testing.T) {
+		repo := newMemoryIdempotencyRepository()
+		calls := 0
+		handler := apimiddleware.Idempotency(repo)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusCreated)
+		}))
+		first := httptest.NewRecorder()
+		handler.ServeHTTP(first, idempotencyRequest(http.MethodPost, "/api/v1/invoices", "tenant-1", "key-123", `{"customer_id":"one"}`))
+		second := httptest.NewRecorder()
+		handler.ServeHTTP(second, idempotencyRequest(http.MethodPost, "/api/v1/invoices", "tenant-1", "key-123", `{"customer_id":"two"}`))
+
+		if calls != 1 || second.Code != http.StatusConflict {
+			t.Fatalf("calls=%d status=%d, want calls=1 and status=%d", calls, second.Code, http.StatusConflict)
+		}
+	})
+
+	t.Run("same key is isolated per tenant", func(t *testing.T) {
+		repo := newMemoryIdempotencyRepository()
+		calls := 0
+		handler := apimiddleware.Idempotency(repo)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusCreated)
+		}))
+		for _, tenantID := range []string{"tenant-1", "tenant-2"} {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, idempotencyRequest(http.MethodPost, "/api/v1/invoices", tenantID, "key-123", `{"customer_id":"one"}`))
+		}
+		if calls != 2 {
+			t.Fatalf("handler called %d times, want 2", calls)
+		}
+	})
+
+	t.Run("processing duplicate conflicts instead of running twice", func(t *testing.T) {
+		repo := newMemoryIdempotencyRepository()
+		req := idempotencyRequest(http.MethodPost, "/api/v1/invoices", "tenant-1", "key-123", `{}`)
+		firstHandler := apimiddleware.Idempotency(repo)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			panic("simulate interrupted request")
+		}))
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected simulated panic")
+				}
+			}()
+			firstHandler.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+
+		handler := apimiddleware.Idempotency(repo)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("handler should not run while a matching request is processing")
+		}))
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
-
-		if !called {
-			t.Error("POST with idempotency key should pass through (scaffold)")
+		if w.Code != http.StatusConflict {
+			t.Fatalf("status = %d, want %d", w.Code, http.StatusConflict)
 		}
 	})
 }
 
-// Ensure unused import doesn't break
-var _ = context.Background
+func TestLoginRateLimit(t *testing.T) {
+	calls := 0
+	handler := apimiddleware.CaptureClientAddress(apimiddleware.LoginRateLimit(2, time.Minute)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	})))
+
+	for attempt := 0; attempt < 3; attempt++ {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+		req.RemoteAddr = "192.0.2.10:1234"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if attempt < 2 && w.Code != http.StatusNoContent {
+			t.Fatalf("attempt %d status = %d, want %d", attempt+1, w.Code, http.StatusNoContent)
+		}
+		if attempt == 2 && (w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") == "") {
+			t.Fatalf("limited status = %d retry-after=%q", w.Code, w.Header().Get("Retry-After"))
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("handler called %d times, want 2", calls)
+	}
+}

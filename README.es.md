@@ -28,7 +28,7 @@ y el patrón transactional outbox.
 
 ## Descripción General
 
-Invoice Generator es un sistema backend de grado producción diseñado para demostrar **system design del mundo real** — no una app CRUD de juguete. Modela un SaaS multi-tenant donde cada tenant gestiona clientes, facturas, pagos, suscripciones y trazas de auditoría con aislamiento estricto aplicado a nivel de base de datos.
+Invoice Generator es una aplicación multi-tenant de facturación y un proyecto de diseño de sistemas. Aún no está listo para producción y no emite facturas electrónicas validadas por la DIAN.
 
 El enfoque está en **ingeniería de backend**: modelado de dominio, separación de responsabilidades, arquitectura orientada a eventos, testeabilidad y preparación operacional. El frontend es intencionalmente minimalista — un SPA en React limpio para ejercer la API.
 
@@ -39,12 +39,12 @@ El enfoque está en **ingeniería de backend**: modelado de dominio, separación
 | 🏢 **Multi-tenancy** | Row-Level Security (RLS) a nivel PostgreSQL — aislamiento de tenants por defensa en profundidad |
 | 💰 **Multi-moneda** | Money basado en enteros (sin bugs de punto flotante), compatible con ISO 4217 |
 | 🧾 **Impuestos por jurisdicción** | Reglas de impuesto por país/región, resueltas por línea de factura |
-| 🔁 **Facturación recurrente** | Suscripciones con frecuencias diaria/semanal/mensual/anual |
+| 🔁 **Facturación recurrente** | Planeada; los endpoints de suscripciones responden explícitamente `501 Not Implemented` |
 | ⚡ **CQRS** | Handlers separados de comando (escritura) y consulta (lectura) |
 | 📨 **Eventos de dominio + Outbox** | Procesamiento asíncrono confiable vía patrón transactional outbox |
 | 📄 **Generación de PDF** | Microservicio separado para renderizado de PDF (CPU-bound) |
-| 🔑 **Llaves de idempotencia** | Retries seguros en endpoints POST (estilo Stripe) |
-| 📋 **Auditoría** | Log de eventos inmutable, solo inserción, por tenant |
+| 🔑 **Llaves de idempotencia** | Replay persistente de respuestas por tenant para POST con clave |
+| 📋 **Auditoría** | Existe el esquema de almacenamiento; la API sigue deshabilitada hasta implementar escrituras y consultas |
 | 🔢 **Numeración de facturas** | Secuencial por tenant, resistente a huecos vía secuencias de BD |
 | 🗑️ **Soft deletes** | Nunca borrar físicamente — preservar integridad de auditoría |
 | 🔐 **Autenticación JWT** | Bearer token con contexto por tenant (scaffold) |
@@ -189,20 +189,19 @@ invoice-generator/
 | `POST` | `/api/v1/invoices` | Crear factura (idempotente) |
 | `GET` | `/api/v1/invoices` | Listar facturas (paginado, filtrable) |
 | `GET` | `/api/v1/invoices/:id` | Detalle de factura |
-| `PATCH` | `/api/v1/invoices/:id` | Actualizar factura (solo borrador, scaffold) |
+| `PATCH` | `/api/v1/invoices/:id` | No disponible (`501`) |
 | `POST` | `/api/v1/invoices/:id/issue` | Emitir factura |
 | `POST` | `/api/v1/invoices/:id/cancel` | Cancelar factura |
 | `POST` | `/api/v1/invoices/:id/payments` | Registrar pago (idempotente) |
 | `GET` | `/api/v1/invoices/:id/payments` | Listar pagos de factura |
-| `GET` | `/api/v1/invoices/:id/pdf` | Descargar PDF (scaffold) |
+| `GET` | `/api/v1/invoices/:id/pdf` | Descargar PDF generado |
 | `POST` | `/api/v1/customers` | Crear cliente |
 | `GET` | `/api/v1/customers` | Listar clientes (paginado) |
 | `GET` | `/api/v1/customers/:id` | Detalle de cliente |
-| `POST` | `/api/v1/subscriptions` | Crear suscripción (scaffold) |
-| `GET` | `/api/v1/subscriptions` | Listar suscripciones (scaffold) |
-| `DELETE` | `/api/v1/subscriptions/:id` | Cancelar suscripción (scaffold) |
-| `GET` | `/api/v1/audit` | Consultar auditoría (scaffold) |
-| `GET` | `/healthz` | Health check |
+| `POST` / `GET` / `DELETE` | `/api/v1/subscriptions...` | No disponible (`501`) |
+| `GET` | `/api/v1/audit` | No disponible (`501`) |
+| `GET` | `/health` o `/health/live` | Liveness |
+| `GET` | `/health/ready` | Readiness; comprueba PostgreSQL |
 
 Especificación completa: [docs/openapi.yaml](docs/openapi.yaml)
 
@@ -256,16 +255,17 @@ cd backend && go test -v ./internal/domain/entity/...
 | [Spec OpenAPI](docs/openapi.yaml) | Especificación API (importar a Swagger/Postman) |
 | [ADRs](docs/adr/) | 10 Architecture Decision Records |
 | [Setup Local](LOCAL_SETUP.md) | Instrucciones detalladas de desarrollo local |
+| [Operación de producción](docs/operations/production-readiness.md) | Configuración, autorización, readiness y verificación de backup/restauración |
 
 ## Roadmap
 
-- [ ] Autenticación basada en JWT (implementación completa)
+- [ ] Aprovisionamiento confiable de usuarios, recuperación de contraseña y revocación de sesiones
 - [ ] Notificaciones por email vía SMTP/SendGrid
 - [ ] Entrega de webhooks para eventos de dominio
-- [ ] Middleware de rate limiting
 - [ ] Métricas Prometheus + dashboards Grafana
 - [ ] Manifiestos de despliegue Kubernetes
-- [ ] Tests end-to-end con Playwright
+- [ ] Integración del proveedor tecnológico DIAN y flujo de validación fiscal
+- [ ] Implementación de suscripciones y API de auditoría
 - [ ] Internacionalización (i18n) para el frontend
 
 ## Contribuir

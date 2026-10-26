@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -65,6 +66,9 @@ func run(args []string) error {
 	if databaseURL == "" {
 		return fmt.Errorf("DB_OPERATOR_URL is required; use a dedicated operator login, not invoicegen_app")
 	}
+	if err := validateOperatorDatabaseURL(databaseURL, os.Getenv("ENVIRONMENT")); err != nil {
+		return err
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -91,6 +95,21 @@ func run(args []string) error {
 	}
 
 	fmt.Printf("Requeued delivery %s for consumer %s in tenant %s.\n", parsedEventID, *consumer, parsedTenantID)
+	return nil
+}
+
+func validateOperatorDatabaseURL(databaseURL, environment string) error {
+	if strings.EqualFold(strings.TrimSpace(environment), "production") {
+		parsed, err := url.Parse(databaseURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") {
+			return fmt.Errorf("DB_OPERATOR_URL must be a PostgreSQL URL in production")
+		}
+		switch strings.ToLower(parsed.Query().Get("sslmode")) {
+		case "require", "verify-ca", "verify-full":
+		default:
+			return fmt.Errorf("DB_OPERATOR_URL must enable TLS in production")
+		}
+	}
 	return nil
 }
 

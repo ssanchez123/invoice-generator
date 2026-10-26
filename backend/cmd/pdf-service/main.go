@@ -14,6 +14,7 @@ import (
 
 	"github.com/santiagossaa/invoice-generator/internal/application/outbox"
 	pdfapp "github.com/santiagossaa/invoice-generator/internal/application/pdf"
+	"github.com/santiagossaa/invoice-generator/internal/config"
 	"github.com/santiagossaa/invoice-generator/internal/domain/entity"
 	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 	pdfrenderer "github.com/santiagossaa/invoice-generator/internal/infrastructure/pdf"
@@ -35,8 +36,11 @@ const deliveryLeaseDuration = 5 * time.Minute
 func main() {
 	log.Println("pdf-service starting...")
 
-	dbURL := repository.DatabaseURL()
-	db, err := repository.NewDB(context.Background(), dbURL)
+	cfg, err := config.LoadDatabaseConfig()
+	if err != nil {
+		log.Fatalf("failed to load database config: %v", err)
+	}
+	db, err := repository.NewDB(context.Background(), cfg.DatabaseURL())
 	if err != nil {
 		log.Fatalf("failed to connect to db: %v", err)
 	}

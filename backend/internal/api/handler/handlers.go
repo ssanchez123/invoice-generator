@@ -480,12 +480,7 @@ func GetInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateInvoice(w http.ResponseWriter, r *http.Request) {
-	// PATCH /api/v1/invoices/:id (draft only) — scaffold
-	id := chi.URLParam(r, "id")
-	respondJSON(w, http.StatusOK, map[string]string{
-		"message":    "update invoice — scaffold",
-		"invoice_id": id,
-	})
+	respondError(w, http.StatusNotImplemented, "invoice updates are not available")
 }
 
 func IssueInvoice(w http.ResponseWriter, r *http.Request) {
@@ -804,56 +799,20 @@ func GetCustomer(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, customerToDTO(customer))
 }
 
-// ========== Subscriptions (scaffolds) ==========
+// ========== Unsupported endpoints ==========
 
 func CreateSubscription(w http.ResponseWriter, r *http.Request) {
-	// POST /api/v1/subscriptions — scaffold
-	var req struct {
-		CustomerID string `json:"customer_id"`
-		Frequency  string `json:"frequency"`
-		Items      []struct {
-			Description string `json:"description"`
-			Quantity    int64  `json:"quantity"`
-			UnitPrice   int64  `json:"unit_price"`
-			TaxRateBPS  int64  `json:"tax_rate_bps"`
-		} `json:"items"`
-		NextBillingDate string `json:"next_billing_date"`
-	}
-
-	if err := parseBody(r, &req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	respondJSON(w, http.StatusCreated, map[string]any{
-		"message":  "create subscription — scaffold",
-		"received": req,
-	})
+	respondError(w, http.StatusNotImplemented, "subscriptions are not available")
 }
 
 func ListSubscriptions(w http.ResponseWriter, r *http.Request) {
-	// GET /api/v1/subscriptions — scaffold
-	respondJSON(w, http.StatusOK, map[string]any{
-		"message": "list subscriptions — scaffold",
-		"data":    []any{},
-	})
+	respondError(w, http.StatusNotImplemented, "subscriptions are not available")
 }
 
 func CancelSubscription(w http.ResponseWriter, r *http.Request) {
-	// DELETE /api/v1/subscriptions/:id — scaffold
-	id := chi.URLParam(r, "id")
-	respondJSON(w, http.StatusOK, map[string]string{
-		"message":         "cancel subscription — scaffold",
-		"subscription_id": id,
-	})
+	respondError(w, http.StatusNotImplemented, "subscriptions are not available")
 }
 
-// ========== Audit (scaffold) ==========
-
 func ListAuditEntries(w http.ResponseWriter, r *http.Request) {
-	// GET /api/v1/audit?entity_type=invoice&entity_id=... — scaffold
-	respondJSON(w, http.StatusOK, map[string]any{
-		"message": "audit trail — scaffold",
-		"data":    []any{},
-	})
+	respondError(w, http.StatusNotImplemented, "audit trail is not available")
 }

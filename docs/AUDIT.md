@@ -6,6 +6,8 @@
 **Metodología:** Checklist manual archivo por archivo
 **Objetivo:** Evaluar cada aspecto del proyecto desde POV de Ingeniería Senior y Arquitectura
 
+> **Estado del documento:** checklist histórico del 2026-08-18; los scores no se han recalculado y este archivo no certifica readiness actual. Para la configuración validada y el procedimiento operativo vigente, consultar [production-readiness.md](operations/production-readiness.md). Las suscripciones, actualización de facturas y API de auditoría devuelven `501` hasta que su lógica esté implementada.
+
 ---
 
 ## Instrucciones de Uso

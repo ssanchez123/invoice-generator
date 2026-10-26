@@ -39,12 +39,12 @@ El enfoque está en **ingeniería de backend**: modelado de dominio, separación
 | 🏢 **Multi-tenancy** | Row-Level Security (RLS) a nivel PostgreSQL — aislamiento de tenants por defensa en profundidad |
 | 💰 **Multi-moneda** | Money basado en enteros (sin bugs de punto flotante), compatible con ISO 4217 |
 | 🧾 **Impuestos por jurisdicción** | Reglas de impuesto por país/región, resueltas por línea de factura |
-| 🔁 **Facturación recurrente** | Planeada; los endpoints de suscripciones responden explícitamente `501 Not Implemented` |
+| 🔁 **Facturación recurrente** | Las suscripciones crean borradores para revisión y emisión manual; los ciclos atrasados se recuperan progresivamente |
 | ⚡ **CQRS** | Handlers separados de comando (escritura) y consulta (lectura) |
 | 📨 **Eventos de dominio + Outbox** | Procesamiento asíncrono confiable vía patrón transactional outbox |
 | 📄 **Generación de PDF** | Microservicio separado para renderizado de PDF (CPU-bound) |
 | 🔑 **Llaves de idempotencia** | Replay persistente de respuestas por tenant para POST con clave |
-| 📋 **Auditoría** | Existe el esquema de almacenamiento; la API sigue deshabilitada hasta implementar escrituras y consultas |
+| 📋 **Auditoría** | Eventos append-only por tenant para facturas, clientes, suscripciones y aprovisionamiento; consulta exclusiva de administradores |
 | 🔢 **Numeración de facturas** | Secuencial por tenant, resistente a huecos vía secuencias de BD |
 | 🗑️ **Soft deletes** | Nunca borrar físicamente — preservar integridad de auditoría |
 | 🔐 **Autenticación JWT** | Bearer token con contexto por tenant (scaffold) |
@@ -265,7 +265,7 @@ cd backend && go test -v ./internal/domain/entity/...
 - [ ] Métricas Prometheus + dashboards Grafana
 - [ ] Manifiestos de despliegue Kubernetes
 - [ ] Integración del proveedor tecnológico DIAN y flujo de validación fiscal
-- [ ] Implementación de suscripciones y API de auditoría
+- [x] Alta cerrada de tenants, edición de borradores, generación recurrente de borradores y API de auditoría para administradores
 - [ ] Internacionalización (i18n) para el frontend
 
 ## Contribuir

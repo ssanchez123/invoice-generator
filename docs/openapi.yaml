@@ -16,7 +16,7 @@ info:
     Obtain a token via `POST /api/v1/auth/login`.
 
     ## Idempotency
-    POST endpoints that create or modify state support the `Idempotency-Key` header.
+    State-changing POST endpoints and subscription cancellation support the `Idempotency-Key` header.
     Provide a unique key (e.g., UUID) to safely retry requests without side effects.
     Cached responses are returned for duplicate keys within a 24-hour window.
   version: 1.0.0
@@ -74,7 +74,7 @@ paths:
     post:
       tags: [Auth]
       summary: Public registration disabled
-      description: Public tenant and user registration is disabled until trusted provisioning is available.
+      description: Public registration is disabled. Trusted operators provision tenants and their first administrator using the tenant-ops command.
       security: []
       responses:
         '403':
@@ -433,6 +433,7 @@ paths:
       tags: [Subscriptions]
       summary: Cancel subscription
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - name: id
           in: path
           required: true
@@ -440,8 +441,16 @@ paths:
             type: string
             format: uuid
       responses:
-        '204':
+        '200':
           description: Subscription cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: cancelled
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -455,12 +464,16 @@ paths:
           in: query
           schema:
             type: string
-            enum: [invoice, payment, customer, subscription]
+            enum: [invoice, payment, customer, subscription, tenant]
         - name: entity_id
           in: query
           schema:
             type: string
             format: uuid
+        - name: action
+          in: query
+          schema:
+            type: string
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
@@ -719,7 +732,13 @@ components:
 
     UpdateInvoiceRequest:
       type: object
+      required: [customer_id, currency, due_date, items]
       properties:
+        customer_id:
+          type: string
+          format: uuid
+        currency:
+          type: string
         due_date:
           type: string
           format: date-time
@@ -829,14 +848,27 @@ components:
         id:
           type: string
           format: uuid
+        tenant_id:
+          type: string
+          format: uuid
         customer_id:
           type: string
           format: uuid
+        currency:
+          type: string
+        plan_items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceItem'
         frequency:
           $ref: '#/components/schemas/BillingFrequency'
         next_billing_date:
           type: string
           format: date-time
+        billing_day:
+          type: integer
+          minimum: 1
+          maximum: 31
         status:
           type: string
           enum: [active, paused, cancelled]
@@ -849,11 +881,14 @@ components:
 
     CreateSubscriptionRequest:
       type: object
-      required: [customer_id, frequency, next_billing_date, items]
+      required: [customer_id, currency, frequency, next_billing_date, items]
       properties:
         customer_id:
           type: string
           format: uuid
+        currency:
+          type: string
+          example: COP
         frequency:
           $ref: '#/components/schemas/BillingFrequency'
         next_billing_date:
@@ -872,7 +907,11 @@ components:
               unit_price:
                 type: integer
                 format: int64
+                description: Minor units (cents)
               tax_rate_bps:
+                type: integer
+                format: int64
+              discount_bps:
                 type: integer
                 format: int64
 

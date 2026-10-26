@@ -43,8 +43,10 @@ export interface Invoice {
   tax_total: number
   total: number
   notes?: string
+  metadata?: Record<string, unknown>
   items?: InvoiceItem[]
   created_at: string
+  updated_at?: string
 }
 
 export interface Customer {
@@ -72,6 +74,31 @@ export interface Payment {
   method: string
   reference: string
   paid_at: string
+  created_at: string
+}
+
+export interface Subscription {
+  id: string
+  tenant_id: string
+  customer_id: string
+  plan_items: InvoiceItem[]
+  currency: string
+  frequency: 'daily' | 'weekly' | 'monthly' | 'yearly'
+  next_billing_date: string
+  billing_day: number
+  status: 'active' | 'paused' | 'cancelled'
+  created_at: string
+  updated_at: string
+}
+
+export interface AuditEntry {
+  id: string
+  tenant_id: string
+  entity_type: string
+  entity_id: string
+  action: string
+  actor_id: string
+  payload: Record<string, unknown>
   created_at: string
 }
 
@@ -280,6 +307,21 @@ export const api = {
   issueInvoice: (id: string) =>
     request<Invoice>(`/invoices/${encodeURIComponent(id)}/issue`, { method: 'POST' }),
 
+  updateInvoice: (
+    id: string,
+    body: {
+      customer_id: string
+      currency: string
+      due_date: string
+      items: Omit<InvoiceItem, 'id' | 'total'>[]
+      notes?: string
+    },
+  ) =>
+    request<Invoice>(`/invoices/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
   cancelInvoice: (id: string) =>
     request<{ status: string }>(`/invoices/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
 
@@ -318,4 +360,46 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  listSubscriptions: (params: { status?: string; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams()
+    if (params.status) query.set('status', params.status)
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return request<{ data: Subscription[]; total: number }>(`/subscriptions${suffix}`)
+  },
+
+  createSubscription: (
+    body: {
+      customer_id: string
+      currency: string
+      frequency: Subscription['frequency']
+      next_billing_date: string
+      items: Omit<InvoiceItem, 'id' | 'total'>[]
+    },
+    idempotencyKey: string = crypto.randomUUID(),
+  ) =>
+    request<Subscription>('/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+
+  cancelSubscription: (id: string, idempotencyKey: string = crypto.randomUUID()) =>
+    request<{ status: string }>(`/subscriptions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    }),
+
+  listAuditEntries: (params: { entity_type?: string; entity_id?: string; action?: string; limit?: number; offset?: number } = {}) => {
+    const query = new URLSearchParams()
+    if (params.entity_type) query.set('entity_type', params.entity_type)
+    if (params.entity_id) query.set('entity_id', params.entity_id)
+    if (params.action) query.set('action', params.action)
+    if (params.limit !== undefined) query.set('limit', String(params.limit))
+    if (params.offset !== undefined) query.set('offset', String(params.offset))
+    const suffix = query.size > 0 ? `?${query.toString()}` : ''
+    return request<{ data: AuditEntry[]; total: number }>(`/audit${suffix}`)
+  },
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,11 +26,16 @@ func NewCustomerRepository(db *DB) *CustomerRepository {
 
 // Save creates or updates a customer.
 func (r *CustomerRepository) Save(ctx context.Context, customer *entity.Customer) error {
-	conn, err := r.db.TenantConn(ctx, customer.TenantID)
+	tx, err := r.db.TenantTx(ctx, customer.TenantID)
 	if err != nil {
 		return err
 	}
-	defer conn.Release()
+	defer tx.Rollback(ctx)
+
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM customers WHERE id = $1)`, customer.ID).Scan(&exists); err != nil {
+		return fmt.Errorf("check customer existence: %w", err)
+	}
 
 	addrJSON, err := json.Marshal(customer.Address)
 	if err != nil {
@@ -40,8 +46,11 @@ func (r *CustomerRepository) Save(ctx context.Context, customer *entity.Customer
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
 	}
+	if string(metaJSON) == "null" {
+		metaJSON = []byte("{}")
+	}
 
-	_, err = conn.Exec(ctx, `
+	result, err := tx.Exec(ctx, `
 		INSERT INTO customers (id, tenant_id, name, email, phone, address, tax_id, metadata, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (id) DO UPDATE SET
@@ -52,6 +61,7 @@ func (r *CustomerRepository) Save(ctx context.Context, customer *entity.Customer
 			tax_id = EXCLUDED.tax_id,
 			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
+		WHERE customers.tenant_id = EXCLUDED.tenant_id
 	`,
 		customer.ID, customer.TenantID, customer.Name, customer.Email, customer.Phone,
 		addrJSON, customer.TaxID, metaJSON, customer.CreatedAt, customer.UpdatedAt,
@@ -59,8 +69,28 @@ func (r *CustomerRepository) Save(ctx context.Context, customer *entity.Customer
 	if err != nil {
 		return fmt.Errorf("save customer: %w", err)
 	}
-
-	return nil
+	if result.RowsAffected() == 0 {
+		return errors.New("customer belongs to another tenant")
+	}
+	action := "customer.updated"
+	if !exists {
+		action = "customer.created"
+	}
+	actorID, err := auditActorID(ctx)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"updated_at": customer.UpdatedAt})
+	if err != nil {
+		return fmt.Errorf("marshal customer audit payload: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_entries (tenant_id, entity_type, entity_id, action, actor_id, payload)
+		VALUES ($1, 'customer', $2, $3, $4, $5)
+	`, customer.TenantID, customer.ID, action, actorID, payload); err != nil {
+		return fmt.Errorf("insert customer audit entry: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 // FindByID loads a customer by ID.
@@ -135,20 +165,34 @@ func (r *CustomerRepository) Delete(ctx context.Context, id string) error {
 		return errors.New("tenant_id not in context")
 	}
 
-	conn, err := r.db.TenantConn(ctx, tenantID)
+	tx, err := r.db.TenantTx(ctx, tenantID)
 	if err != nil {
 		return err
 	}
-	defer conn.Release()
+	defer tx.Rollback(ctx)
 
-	tag, err := conn.Exec(ctx, "UPDATE customers SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL", id)
+	tag, err := tx.Exec(ctx, "UPDATE customers SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL", id)
 	if err != nil {
 		return fmt.Errorf("delete customer: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	actorID, err := auditActorID(ctx)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"deleted_at": time.Now()})
+	if err != nil {
+		return fmt.Errorf("marshal customer audit payload: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_entries (tenant_id, entity_type, entity_id, action, actor_id, payload)
+		VALUES ($1, 'customer', $2, 'customer.deleted', $3, $4)
+	`, tenantID, id, actorID, payload); err != nil {
+		return fmt.Errorf("insert customer audit entry: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *CustomerRepository) loadCustomer(ctx context.Context, conn *pgxpool.Conn, id string) (*entity.Customer, error) {

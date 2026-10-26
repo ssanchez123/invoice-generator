@@ -40,6 +40,10 @@ func (r *InvoiceRepository) Save(ctx context.Context, invoice *entity.Invoice) e
 	}
 	defer tx.Rollback(ctx) // safe: no-op if committed
 
+	created, err := invoiceCreatedTx(ctx, tx, invoice.ID)
+	if err != nil {
+		return err
+	}
 	// Upsert invoice
 	err = r.saveInvoiceTx(ctx, tx, invoice)
 	if err != nil {
@@ -55,7 +59,7 @@ func (r *InvoiceRepository) Save(ctx context.Context, invoice *entity.Invoice) e
 	}
 
 	// Write audit entry
-	if err := r.saveAuditTx(ctx, tx, invoice); err != nil {
+	if err := r.saveAuditTx(ctx, tx, invoice, events, created); err != nil {
 		return err
 	}
 
@@ -89,9 +93,11 @@ func (r *InvoiceRepository) saveInvoiceTx(ctx context.Context, tx pgx.Tx, inv *e
 		                      currency, subtotal, tax_total, total, notes, metadata, issued_snapshot, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		ON CONFLICT (id) DO UPDATE SET
+			customer_id = EXCLUDED.customer_id,
 			status = EXCLUDED.status,
 			issue_date = EXCLUDED.issue_date,
 			due_date = EXCLUDED.due_date,
+			currency = EXCLUDED.currency,
 			subtotal = EXCLUDED.subtotal,
 			tax_total = EXCLUDED.tax_total,
 			total = EXCLUDED.total,
@@ -150,8 +156,12 @@ func (r *InvoiceRepository) prepareIssuedSnapshot(ctx context.Context, tx pgx.Tx
 	if err != nil {
 		return fmt.Errorf("load invoice state before saving snapshot: %w", err)
 	}
-	if persistedTenantID != inv.TenantID || persistedCustomerID != inv.CustomerID {
-		return errors.New("invoice tenant and customer identity cannot be changed")
+	if persistedTenantID != inv.TenantID {
+		return errors.New("invoice tenant cannot be changed")
+	}
+	if persistedCustomerID != inv.CustomerID &&
+		(persistedStatus != entity.InvoiceStatusDraft || inv.Status != entity.InvoiceStatusDraft || len(persistedSnapshot) > 0) {
+		return errors.New("customer can only be changed while the invoice is a draft")
 	}
 	if len(persistedSnapshot) > 0 {
 		var snapshot entity.InvoiceSnapshot
@@ -219,19 +229,47 @@ func (r *InvoiceRepository) saveEventsTx(ctx context.Context, tx pgx.Tx, tenantI
 }
 
 // saveAuditTx writes an immutable audit entry.
-func (r *InvoiceRepository) saveAuditTx(ctx context.Context, tx pgx.Tx, inv *entity.Invoice) error {
-	payload, _ := json.Marshal(map[string]any{
+func (r *InvoiceRepository) saveAuditTx(ctx context.Context, tx pgx.Tx, inv *entity.Invoice, events []entity.DomainEvent, created bool) error {
+	payload, err := json.Marshal(map[string]any{
 		"status":     string(inv.Status),
 		"total":      inv.Total.Amount,
 		"currency":   inv.Currency,
 		"updated_at": inv.UpdatedAt,
 	})
+	if err != nil {
+		return fmt.Errorf("marshal invoice audit payload: %w", err)
+	}
+	var actorID any
+	if actor, ok := ctx.Value(ctxkey.ActorIDKey).(string); ok && actor != "" {
+		if _, err := uuid.Parse(actor); err != nil {
+			return fmt.Errorf("invalid audit actor ID: %w", err)
+		}
+		actorID = actor
+	}
+	action := "invoice.updated"
+	if created {
+		action = "invoice.created"
+	}
+	switch inv.Status {
+	case entity.InvoiceStatusIssued:
+		action = "invoice.issued"
+	case entity.InvoiceStatusPaid:
+		action = "invoice.paid"
+	case entity.InvoiceStatusCancelled:
+		action = "invoice.cancelled"
+	}
+	for _, event := range events {
+		switch event.EventName() {
+		case "payment.recorded":
+			action = "payment.recorded"
+		}
+	}
 
-	_, err := tx.Exec(ctx, `
-		INSERT INTO audit_entries (id, tenant_id, entity_type, entity_id, action, payload, created_at)
-		VALUES ($1, $2, 'invoice', $3, $4, $5, NOW())
+	_, err = tx.Exec(ctx, `
+		INSERT INTO audit_entries (id, tenant_id, entity_type, entity_id, action, actor_id, payload, created_at)
+		VALUES ($1, $2, 'invoice', $3, $4, $5, $6, NOW())
 	`,
-		uuid.NewString(), inv.TenantID, inv.ID, string(inv.Status), payload,
+		uuid.NewString(), inv.TenantID, inv.ID, action, actorID, payload,
 	)
 	if err != nil {
 		return fmt.Errorf("insert audit: %w", err)
@@ -342,7 +380,11 @@ func (r *InvoiceRepository) SaveTx(ctx context.Context, invoice *entity.Invoice)
 		return errors.New("SaveTx requires a transaction in context")
 	}
 
-	err := r.saveInvoiceTx(ctx, tx, invoice)
+	created, err := invoiceCreatedTx(ctx, tx, invoice.ID)
+	if err != nil {
+		return err
+	}
+	err = r.saveInvoiceTx(ctx, tx, invoice)
 	if err != nil {
 		return err
 	}
@@ -356,11 +398,18 @@ func (r *InvoiceRepository) SaveTx(ctx context.Context, invoice *entity.Invoice)
 	}
 
 	// Write audit entry
-	if err := r.saveAuditTx(ctx, tx, invoice); err != nil {
+	if err := r.saveAuditTx(ctx, tx, invoice, events, created); err != nil {
 		return err
 	}
-
 	return nil
+}
+
+func invoiceCreatedTx(ctx context.Context, tx pgx.Tx, invoiceID string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM invoices WHERE id = $1)`, invoiceID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check invoice existence for audit: %w", err)
+	}
+	return !exists, nil
 }
 
 // FindByNumber loads an invoice by tenant-scoped number.

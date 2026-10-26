@@ -326,7 +326,7 @@ func idempotencyRequest(method, path, tenantID, key, body string) *http.Request 
 }
 
 func TestIdempotency(t *testing.T) {
-	t.Run("non-POST passes through", func(t *testing.T) {
+	t.Run("GET passes through", func(t *testing.T) {
 		called := false
 		handler := apimiddleware.Idempotency(newMemoryIdempotencyRepository())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			called = true
@@ -378,6 +378,29 @@ func TestIdempotency(t *testing.T) {
 		if second.Code != http.StatusCreated || second.Body.String() != first.Body.String() ||
 			second.Header().Get("Location") != "/api/v1/invoices/invoice-1" {
 			t.Fatalf("replayed response differs: status=%d body=%q headers=%v", second.Code, second.Body.String(), second.Header())
+		}
+	})
+
+	t.Run("same DELETE key replays the original response", func(t *testing.T) {
+		repo := newMemoryIdempotencyRepository()
+		calls := 0
+		handler := apimiddleware.Idempotency(repo)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"cancelled"}`))
+		}))
+
+		first := httptest.NewRecorder()
+		handler.ServeHTTP(first, idempotencyRequest(http.MethodDelete, "/api/v1/subscriptions/sub-1", "tenant-1", "cancel-key", ""))
+		second := httptest.NewRecorder()
+		handler.ServeHTTP(second, idempotencyRequest(http.MethodDelete, "/api/v1/subscriptions/sub-1", "tenant-1", "cancel-key", ""))
+
+		if calls != 1 {
+			t.Fatalf("handler called %d times, want 1", calls)
+		}
+		if second.Code != http.StatusOK || second.Body.String() != first.Body.String() {
+			t.Fatalf("replayed response differs: status=%d body=%q", second.Code, second.Body.String())
 		}
 	})
 

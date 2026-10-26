@@ -196,7 +196,7 @@ func (tdb *TestDB) ResetDB(t *testing.T) {
 	t.Helper()
 	ctx := context.Background()
 	tables := []string{
-		"outbox_delivery_replays", "idempotency_records", "payments", "invoice_items", "invoices", "invoice_sequences",
+		"outbox_delivery_replays", "idempotency_records", "payments", "invoice_items", "invoices", "subscriptions", "invoice_sequences",
 		"users", "customers", "tenants", "outbox", "audit_entries",
 	}
 	for _, tbl := range tables {

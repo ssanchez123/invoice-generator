@@ -23,10 +23,15 @@ import (
 // HandlerDeps holds the dependencies injected into all handlers.
 // This struct is wired up in main.go and passed to each handler.
 type HandlerDeps struct {
-	CreateInvoice *commandHandler.CreateInvoiceHandler
-	IssueInvoice  *commandHandler.IssueInvoiceHandler
-	CancelInvoice *commandHandler.CancelInvoiceHandler
-	RecordPayment *commandHandler.RecordPaymentHandler
+	CreateInvoice      *commandHandler.CreateInvoiceHandler
+	IssueInvoice       *commandHandler.IssueInvoiceHandler
+	CancelInvoice      *commandHandler.CancelInvoiceHandler
+	RecordPayment      *commandHandler.RecordPaymentHandler
+	UpdateInvoice      *commandHandler.UpdateInvoiceHandler
+	CreateSubscription *commandHandler.CreateSubscriptionHandler
+	CancelSubscription *commandHandler.CancelSubscriptionHandler
+	SubscriptionRepo   port.SubscriptionRepository
+	AuditRepo          port.AuditRepository
 
 	ListInvoices  *queryHandler.ListInvoicesHandler
 	GetInvoice    *queryHandler.GetInvoiceHandler
@@ -101,9 +106,13 @@ func mapDomainError(err error) (int, string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, entity.ErrDuplicatePayment):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, entity.ErrInvalidInvoiceDetails), errors.Is(err, entity.ErrInvalidSubscription):
+		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, commandHandler.ErrCustomerNotInTenant):
 		return http.StatusForbidden, err.Error()
 	case errors.Is(err, commandHandler.ErrInvoiceNotInTenant):
+		return http.StatusForbidden, err.Error()
+	case errors.Is(err, commandHandler.ErrSubscriptionNotInTenant):
 		return http.StatusForbidden, err.Error()
 	case errors.Is(err, commandHandler.ErrPaymentNotFound):
 		return http.StatusNotFound, err.Error()
@@ -313,7 +322,7 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// RegisterDisabled rejects public registration until a trusted provisioning flow exists.
+// RegisterDisabled keeps public registration closed; tenant provisioning is operator-only.
 func RegisterDisabled(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusForbidden, "public registration is disabled")
 }
@@ -480,7 +489,66 @@ func GetInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func UpdateInvoice(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "invoice updates are not available")
+	tenantID, ok := mustTenantID(w, r)
+	if !ok {
+		return
+	}
+	if deps == nil || deps.UpdateInvoice == nil {
+		respondError(w, http.StatusServiceUnavailable, "invoice update is not configured")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		respondError(w, http.StatusBadRequest, "invoice id is required")
+		return
+	}
+	var req struct {
+		CustomerID string `json:"customer_id"`
+		Currency   string `json:"currency"`
+		DueDate    string `json:"due_date"`
+		Items      []struct {
+			Description string `json:"description"`
+			Quantity    int64  `json:"quantity"`
+			UnitPrice   int64  `json:"unit_price"`
+			TaxRateBPS  int64  `json:"tax_rate_bps"`
+			DiscountBPS int64  `json:"discount_bps"`
+		} `json:"items"`
+		Notes string `json:"notes"`
+	}
+	if err := parseBody(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	dueDate, err := time.Parse(time.RFC3339, req.DueDate)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid due_date format, expected RFC3339")
+		return
+	}
+	items := make([]commandHandler.ItemInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, commandHandler.ItemInput{
+			Description: item.Description,
+			Quantity:    item.Quantity,
+			UnitPrice:   item.UnitPrice,
+			TaxRateBPS:  item.TaxRateBPS,
+			DiscountBPS: item.DiscountBPS,
+		})
+	}
+	invoice, err := deps.UpdateInvoice.Handle(r.Context(), commandHandler.UpdateInvoiceCommand{
+		InvoiceID:  id,
+		TenantID:   tenantID,
+		CustomerID: req.CustomerID,
+		DueDate:    dueDate,
+		Currency:   req.Currency,
+		Items:      items,
+		Notes:      req.Notes,
+	})
+	if err != nil {
+		status, msg := mapDomainError(err)
+		respondError(w, status, msg)
+		return
+	}
+	respondJSON(w, http.StatusOK, invoiceToDTO(invoice))
 }
 
 func IssueInvoice(w http.ResponseWriter, r *http.Request) {
@@ -799,20 +867,189 @@ func GetCustomer(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, customerToDTO(customer))
 }
 
-// ========== Unsupported endpoints ==========
+// ========== Subscriptions and audit ==========
 
 func CreateSubscription(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "subscriptions are not available")
+	tenantID, ok := mustTenantID(w, r)
+	if !ok {
+		return
+	}
+	if deps == nil || deps.CreateSubscription == nil {
+		respondError(w, http.StatusServiceUnavailable, "subscription management is not configured")
+		return
+	}
+	var req struct {
+		CustomerID      string `json:"customer_id"`
+		Currency        string `json:"currency"`
+		Frequency       string `json:"frequency"`
+		NextBillingDate string `json:"next_billing_date"`
+		Items           []struct {
+			Description string `json:"description"`
+			Quantity    int64  `json:"quantity"`
+			UnitPrice   int64  `json:"unit_price"`
+			TaxRateBPS  int64  `json:"tax_rate_bps"`
+			DiscountBPS int64  `json:"discount_bps"`
+		} `json:"items"`
+	}
+	if err := parseBody(r, &req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.CustomerID == "" || req.Currency == "" || req.Frequency == "" || req.NextBillingDate == "" {
+		respondError(w, http.StatusBadRequest, "customer_id, currency, frequency, and next_billing_date are required")
+		return
+	}
+	nextDate, err := time.Parse(time.RFC3339, req.NextBillingDate)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid next_billing_date format, expected RFC3339")
+		return
+	}
+	items := make([]commandHandler.ItemInput, 0, len(req.Items))
+	for _, item := range req.Items {
+		items = append(items, commandHandler.ItemInput{
+			Description: item.Description,
+			Quantity:    item.Quantity,
+			UnitPrice:   item.UnitPrice,
+			TaxRateBPS:  item.TaxRateBPS,
+			DiscountBPS: item.DiscountBPS,
+		})
+	}
+	subscription, err := deps.CreateSubscription.Handle(r.Context(), commandHandler.CreateSubscriptionCommand{
+		TenantID:        tenantID,
+		CustomerID:      req.CustomerID,
+		Currency:        req.Currency,
+		Frequency:       entity.BillingFrequency(req.Frequency),
+		NextBillingDate: nextDate,
+		Items:           items,
+	})
+	if err != nil {
+		status, msg := mapDomainError(err)
+		respondError(w, status, msg)
+		return
+	}
+	respondJSON(w, http.StatusCreated, subscriptionToDTO(subscription))
 }
 
 func ListSubscriptions(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "subscriptions are not available")
+	tenantID, ok := mustTenantID(w, r)
+	if !ok {
+		return
+	}
+	if deps == nil || deps.SubscriptionRepo == nil {
+		respondError(w, http.StatusServiceUnavailable, "subscription management is not configured")
+		return
+	}
+	q := r.URL.Query()
+	status := q.Get("status")
+	switch status {
+	case "", string(entity.SubscriptionStatusActive), string(entity.SubscriptionStatusPaused), string(entity.SubscriptionStatusCancelled):
+	default:
+		respondError(w, http.StatusBadRequest, "invalid subscription status")
+		return
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	subscriptions, total, err := deps.SubscriptionRepo.FindByTenant(r.Context(), tenantID, status, limit, offset)
+	if err != nil {
+		status, msg := mapDomainError(err)
+		respondError(w, status, msg)
+		return
+	}
+	result := make([]subscriptionDTO, 0, len(subscriptions))
+	for _, subscription := range subscriptions {
+		result = append(result, subscriptionToDTO(subscription))
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"data": result, "total": total})
 }
 
 func CancelSubscription(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "subscriptions are not available")
+	tenantID, ok := mustTenantID(w, r)
+	if !ok {
+		return
+	}
+	if deps == nil || deps.CancelSubscription == nil {
+		respondError(w, http.StatusServiceUnavailable, "subscription management is not configured")
+		return
+	}
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		respondError(w, http.StatusBadRequest, "subscription id is required")
+		return
+	}
+	if err := deps.CancelSubscription.Handle(r.Context(), commandHandler.CancelSubscriptionCommand{
+		SubscriptionID: id,
+		TenantID:       tenantID,
+	}); err != nil {
+		status, msg := mapDomainError(err)
+		respondError(w, status, msg)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
 }
 
 func ListAuditEntries(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "audit trail is not available")
+	tenantID, ok := mustTenantID(w, r)
+	if !ok {
+		return
+	}
+	if deps == nil || deps.AuditRepo == nil {
+		respondError(w, http.StatusServiceUnavailable, "audit trail is not configured")
+		return
+	}
+	q := r.URL.Query()
+	entityID := q.Get("entity_id")
+	if entityID != "" {
+		parsed, err := uuid.Parse(entityID)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid entity_id")
+			return
+		}
+		entityID = parsed.String()
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	entries, total, err := deps.AuditRepo.List(r.Context(), port.AuditFilter{
+		TenantID: tenantID, EntityType: q.Get("entity_type"), EntityID: entityID,
+		Action: q.Get("action"), Limit: limit, Offset: offset,
+	})
+	if err != nil {
+		status, msg := mapDomainError(err)
+		respondError(w, status, msg)
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{"data": entries, "total": total})
+}
+
+type subscriptionDTO struct {
+	ID              string           `json:"id"`
+	TenantID        string           `json:"tenant_id"`
+	CustomerID      string           `json:"customer_id"`
+	PlanItems       []invoiceItemDTO `json:"plan_items"`
+	Currency        string           `json:"currency"`
+	Frequency       string           `json:"frequency"`
+	NextBillingDate time.Time        `json:"next_billing_date"`
+	BillingDay      int              `json:"billing_day"`
+	Status          string           `json:"status"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
+}
+
+func subscriptionToDTO(subscription *entity.Subscription) subscriptionDTO {
+	items := make([]invoiceItemDTO, 0, len(subscription.PlanItems))
+	for _, item := range subscription.PlanItems {
+		items = append(items, invoiceItemDTO{
+			ID: item.ID, Description: item.Description, Quantity: item.Quantity,
+			UnitPrice: item.UnitPrice.Amount, TaxRateBPS: item.TaxRateBPS, DiscountBPS: item.DiscountBPS,
+		})
+	}
+	currency := ""
+	if len(subscription.PlanItems) > 0 {
+		currency = subscription.PlanItems[0].UnitPrice.Currency
+	}
+	return subscriptionDTO{
+		ID: subscription.ID, TenantID: subscription.TenantID, CustomerID: subscription.CustomerID,
+		PlanItems: items, Currency: currency, Frequency: string(subscription.Frequency),
+		NextBillingDate: subscription.NextBillingDate, BillingDay: subscription.BillingDay,
+		Status: string(subscription.Status), CreatedAt: subscription.CreatedAt, UpdatedAt: subscription.UpdatedAt,
+	}
 }

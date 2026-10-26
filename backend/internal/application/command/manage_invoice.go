@@ -20,13 +20,44 @@ type IssueInvoiceCommand struct {
 
 type IssueInvoiceHandler struct {
 	invoiceRepo port.InvoiceRepository
+	uow         port.UnitOfWork
 }
 
-func NewIssueInvoiceHandler(ir port.InvoiceRepository) *IssueInvoiceHandler {
-	return &IssueInvoiceHandler{invoiceRepo: ir}
+func NewIssueInvoiceHandler(ir port.InvoiceRepository, uows ...port.UnitOfWork) *IssueInvoiceHandler {
+	h := &IssueInvoiceHandler{invoiceRepo: ir}
+	if len(uows) > 0 {
+		h.uow = uows[0]
+	}
+	return h
 }
 
 func (h *IssueInvoiceHandler) Handle(ctx context.Context, cmd IssueInvoiceCommand) (*entity.Invoice, error) {
+	if h.uow != nil {
+		txCtx, tx, err := h.uow.BeginTx(ctx, cmd.TenantID)
+		if err != nil {
+			return nil, fmt.Errorf("begin issue transaction: %w", err)
+		}
+		defer tx.Rollback(txCtx)
+
+		invoice, err := h.invoiceRepo.FindByIDForUpdate(txCtx, cmd.InvoiceID)
+		if err != nil {
+			return nil, err
+		}
+		if invoice.TenantID != cmd.TenantID {
+			return nil, ErrInvoiceNotInTenant
+		}
+		if err := invoice.Issue(time.Now()); err != nil {
+			return nil, err
+		}
+		if err := h.invoiceRepo.SaveTx(txCtx, invoice); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(txCtx); err != nil {
+			return nil, fmt.Errorf("commit issue transaction: %w", err)
+		}
+		return invoice, nil
+	}
+
 	invoice, err := h.invoiceRepo.FindByID(ctx, cmd.InvoiceID)
 	if err != nil {
 		return nil, err
@@ -54,13 +85,44 @@ type CancelInvoiceCommand struct {
 
 type CancelInvoiceHandler struct {
 	invoiceRepo port.InvoiceRepository
+	uow         port.UnitOfWork
 }
 
-func NewCancelInvoiceHandler(ir port.InvoiceRepository) *CancelInvoiceHandler {
-	return &CancelInvoiceHandler{invoiceRepo: ir}
+func NewCancelInvoiceHandler(ir port.InvoiceRepository, uows ...port.UnitOfWork) *CancelInvoiceHandler {
+	h := &CancelInvoiceHandler{invoiceRepo: ir}
+	if len(uows) > 0 {
+		h.uow = uows[0]
+	}
+	return h
 }
 
 func (h *CancelInvoiceHandler) Handle(ctx context.Context, cmd CancelInvoiceCommand) error {
+	if h.uow != nil {
+		txCtx, tx, err := h.uow.BeginTx(ctx, cmd.TenantID)
+		if err != nil {
+			return fmt.Errorf("begin cancel transaction: %w", err)
+		}
+		defer tx.Rollback(txCtx)
+
+		invoice, err := h.invoiceRepo.FindByIDForUpdate(txCtx, cmd.InvoiceID)
+		if err != nil {
+			return err
+		}
+		if invoice.TenantID != cmd.TenantID {
+			return ErrInvoiceNotInTenant
+		}
+		if err := invoice.Cancel(); err != nil {
+			return err
+		}
+		if err := h.invoiceRepo.SaveTx(txCtx, invoice); err != nil {
+			return err
+		}
+		if err := tx.Commit(txCtx); err != nil {
+			return fmt.Errorf("commit cancel transaction: %w", err)
+		}
+		return nil
+	}
+
 	invoice, err := h.invoiceRepo.FindByID(ctx, cmd.InvoiceID)
 	if err != nil {
 		return err

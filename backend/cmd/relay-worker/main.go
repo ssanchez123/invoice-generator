@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/santiagossaa/invoice-generator/internal/application/command"
 	"github.com/santiagossaa/invoice-generator/internal/application/outbox"
 	"github.com/santiagossaa/invoice-generator/internal/config"
 	"github.com/santiagossaa/invoice-generator/internal/infrastructure/repository"
@@ -45,6 +47,13 @@ func main() {
 	defer db.Close()
 
 	outboxRepo := repository.NewOutboxRepository(db)
+	invoiceRepo := repository.NewInvoiceRepository(db)
+	customerRepo := repository.NewCustomerRepository(db)
+	subscriptionRepo := repository.NewSubscriptionRepository(db)
+	tenantRepo := repository.NewTenantRepository(db)
+	billingHandler := command.NewProcessDueSubscriptionsHandler(
+		subscriptionRepo, customerRepo, invoiceRepo, repository.NewUnitOfWork(db),
+	)
 	workerID := uuid.NewString()
 
 	// Register event handlers
@@ -58,6 +67,8 @@ func main() {
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	billingTicker := time.NewTicker(time.Minute)
+	defer billingTicker.Stop()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -82,8 +93,31 @@ func main() {
 			if err := processBatch(ctx, outboxRepo, handlers, workerID); err != nil {
 				log.Printf("outbox processing error: %v", err)
 			}
+		case <-billingTicker.C:
+			if err := processDueSubscriptions(ctx, tenantRepo, billingHandler); err != nil {
+				log.Printf("subscription billing error: %v", err)
+			}
 		}
 	}
+}
+
+func processDueSubscriptions(ctx context.Context, tenantRepo *repository.TenantRepository, billingHandler *command.ProcessDueSubscriptionsHandler) error {
+	tenantIDs, err := tenantRepo.ListIDs(ctx)
+	if err != nil {
+		return fmt.Errorf("list tenants for subscription billing: %w", err)
+	}
+	var failures []error
+	for _, tenantID := range tenantIDs {
+		count, err := billingHandler.Handle(ctx, tenantID, time.Now(), 50)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("tenant %s: %w", tenantID, err))
+			continue
+		}
+		if count > 0 {
+			log.Printf("created %d subscription draft(s) for tenant %s", count, tenantID)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 func processBatch(ctx context.Context, outboxRepo *repository.OutboxRepository, handlers map[string]EventHandler, workerID string) error {

@@ -1,8 +1,8 @@
 // Package ctxkey defines shared context keys used across layers.
 //
 // The main purpose is to allow the API middleware (which sets tenant_id
-// from the request) and the infrastructure repositories (which read
-// tenant_id for RLS) to use the SAME context key without creating
+// and actor_id from the request) and the infrastructure repositories (which read
+// those values) to use the SAME context keys without creating
 // a circular dependency between the api and infrastructure packages.
 package ctxkey
 
@@ -12,3 +12,4 @@ package ctxkey
 type CtxKey string
 
 const TenantIDKey CtxKey = "tenant_id"
+const ActorIDKey CtxKey = "actor_id"

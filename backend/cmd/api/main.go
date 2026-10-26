@@ -45,6 +45,8 @@ func main() {
 	invoiceRepo := repository.NewInvoiceRepository(db)
 	customerRepo := repository.NewCustomerRepository(db)
 	paymentRepo := repository.NewPaymentRepository(db)
+	subscriptionRepo := repository.NewSubscriptionRepository(db)
+	auditRepo := repository.NewAuditRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	idempotencyRepo := repository.NewIdempotencyRepository(db)
 	pdfStore, err := storage.NewPDFArtifactStoreFromEnv(context.Background())
@@ -61,12 +63,15 @@ func main() {
 
 	// Application layer handlers (CQRS)
 	createInvoiceH := command.NewCreateInvoiceHandler(invoiceRepo, customerRepo)
-	issueInvoiceH := command.NewIssueInvoiceHandler(invoiceRepo)
-	cancelInvoiceH := command.NewCancelInvoiceHandler(invoiceRepo)
 	// Unit of Work for transactional operations
 	uow := repository.NewUnitOfWork(db)
 
+	issueInvoiceH := command.NewIssueInvoiceHandler(invoiceRepo, uow)
+	cancelInvoiceH := command.NewCancelInvoiceHandler(invoiceRepo, uow)
 	recordPaymentH := command.NewRecordPaymentHandler(invoiceRepo, paymentRepo, uow)
+	updateInvoiceH := command.NewUpdateInvoiceHandler(invoiceRepo, customerRepo, uow)
+	createSubscriptionH := command.NewCreateSubscriptionHandler(subscriptionRepo, customerRepo)
+	cancelSubscriptionH := command.NewCancelSubscriptionHandler(subscriptionRepo, uow)
 
 	listInvoicesH := query.NewListInvoicesHandler(invoiceRepo)
 	getInvoiceH := query.NewGetInvoiceHandler(invoiceRepo)
@@ -75,16 +80,21 @@ func main() {
 
 	// Inject dependencies into HTTP handlers
 	handler.SetDeps(&handler.HandlerDeps{
-		CreateInvoice: createInvoiceH,
-		IssueInvoice:  issueInvoiceH,
-		CancelInvoice: cancelInvoiceH,
-		RecordPayment: recordPaymentH,
-		ListInvoices:  listInvoicesH,
-		GetInvoice:    getInvoiceH,
-		ListCustomers: listCustomersH,
-		ListPayments:  listPaymentsH,
-		CustomerRepo:  customerRepo,
-		PDFStore:      pdfStore,
+		CreateInvoice:      createInvoiceH,
+		IssueInvoice:       issueInvoiceH,
+		CancelInvoice:      cancelInvoiceH,
+		RecordPayment:      recordPaymentH,
+		UpdateInvoice:      updateInvoiceH,
+		CreateSubscription: createSubscriptionH,
+		CancelSubscription: cancelSubscriptionH,
+		SubscriptionRepo:   subscriptionRepo,
+		AuditRepo:          auditRepo,
+		ListInvoices:       listInvoicesH,
+		GetInvoice:         getInvoiceH,
+		ListCustomers:      listCustomersH,
+		ListPayments:       listPaymentsH,
+		CustomerRepo:       customerRepo,
+		PDFStore:           pdfStore,
 	})
 
 	// Auth handlers
@@ -198,9 +208,9 @@ func registerProtectedRoutes(r chi.Router, tokenService port.TokenService, idemp
 		r.With(readRoles).Get("/customers", handler.ListCustomers)
 		r.With(readRoles).Get("/customers/{id}", handler.GetCustomer)
 
-		r.With(memberRole).Post("/subscriptions", handler.CreateSubscription)
+		r.With(memberRole, apimiddleware.Idempotency(idempotencyRepo)).Post("/subscriptions", handler.CreateSubscription)
 		r.With(readRoles).Get("/subscriptions", handler.ListSubscriptions)
-		r.With(memberRole).Delete("/subscriptions/{id}", handler.CancelSubscription)
+		r.With(memberRole, apimiddleware.Idempotency(idempotencyRepo)).Delete("/subscriptions/{id}", handler.CancelSubscription)
 
 		r.With(apimiddleware.RequireRole("admin")).Get("/audit", handler.ListAuditEntries)
 	})

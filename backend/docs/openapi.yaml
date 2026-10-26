@@ -16,7 +16,7 @@ info:
     Obtain a token via `POST /api/v1/auth/login`.
 
     ## Idempotency
-    Enabled state-changing POST endpoints accept the `Idempotency-Key` header.
+    Enabled state-changing POST endpoints and subscription cancellation accept the `Idempotency-Key` header.
     Matching requests replay the original response for 24 hours; reusing a key
     with a different request or while the first request is processing returns 409.
     Keys are optional; clients should provide a unique key when retrying writes.
@@ -96,7 +96,7 @@ paths:
     post:
       tags: [Auth]
       summary: Public registration disabled
-      description: Public tenant and user registration is disabled until trusted provisioning is available.
+      description: Public registration is disabled. Trusted operators provision tenants and their first administrator using the tenant-ops command.
       security: []
       responses:
         '403':
@@ -219,13 +219,27 @@ paths:
           $ref: '#/components/responses/NotFound'
     patch:
       tags: [Invoices]
-      summary: Update invoice (unavailable)
-      description: This endpoint is disabled until draft update behavior is implemented.
+      summary: Update invoice (draft only)
+      description: Only invoices in draft status can be modified.
       parameters:
         - $ref: '#/components/parameters/InvoiceId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateInvoiceRequest'
       responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '200':
+          description: Updated invoice
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Invoice is not in draft status
 
   /api/v1/invoices/{id}/issue:
     post:
@@ -407,23 +421,49 @@ paths:
   /api/v1/subscriptions:
     post:
       tags: [Subscriptions]
-      summary: Create subscription (unavailable)
-      description: Subscription endpoints are disabled until recurring billing rules are implemented.
+      summary: Create subscription
+      description: Creates a recurring schedule; due dates create draft invoices for manual review and issuance.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionRequest'
       responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '201':
+          description: Subscription created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '400':
+          $ref: '#/components/responses/BadRequest'
     get:
       tags: [Subscriptions]
-      summary: List subscriptions (unavailable)
+      summary: List subscriptions
       responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '200':
+          description: Subscription list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Subscription'
+                  total:
+                    type: integer
 
   /api/v1/subscriptions/{id}:
     delete:
       tags: [Subscriptions]
-      summary: Cancel subscription (unavailable)
+      summary: Cancel subscription
       parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
         - name: id
           in: path
           required: true
@@ -431,30 +471,53 @@ paths:
             type: string
             format: uuid
       responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '200':
+          description: Subscription cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: cancelled
 
   /api/v1/audit:
     get:
       tags: [Audit]
-      summary: Query audit trail (unavailable)
-      description: The audit API is disabled until writes and tenant-scoped queries are implemented.
+      summary: Query audit trail
+      description: Returns immutable tenant-scoped audit events. Administrator role required.
       parameters:
         - name: entity_type
           in: query
           schema:
             type: string
-            enum: [invoice, payment, customer, subscription]
+            enum: [invoice, payment, customer, subscription, tenant]
         - name: entity_id
           in: query
           schema:
             type: string
             format: uuid
+        - name: action
+          in: query
+          schema:
+            type: string
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
       responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '200':
+          description: Audit entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+                  total:
+                    type: integer
 
 components:
   securitySchemes:
@@ -705,7 +768,13 @@ components:
 
     UpdateInvoiceRequest:
       type: object
+      required: [customer_id, currency, due_date, items]
       properties:
+        customer_id:
+          type: string
+          format: uuid
+        currency:
+          type: string
         due_date:
           type: string
           format: date-time
@@ -815,14 +884,27 @@ components:
         id:
           type: string
           format: uuid
+        tenant_id:
+          type: string
+          format: uuid
         customer_id:
           type: string
           format: uuid
+        currency:
+          type: string
+        plan_items:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvoiceItem'
         frequency:
           $ref: '#/components/schemas/BillingFrequency'
         next_billing_date:
           type: string
           format: date-time
+        billing_day:
+          type: integer
+          minimum: 1
+          maximum: 31
         status:
           type: string
           enum: [active, paused, cancelled]
@@ -835,11 +917,13 @@ components:
 
     CreateSubscriptionRequest:
       type: object
-      required: [customer_id, frequency, next_billing_date, items]
+      required: [customer_id, currency, frequency, next_billing_date, items]
       properties:
         customer_id:
           type: string
           format: uuid
+        currency:
+          type: string
         frequency:
           $ref: '#/components/schemas/BillingFrequency'
         next_billing_date:
@@ -858,7 +942,11 @@ components:
               unit_price:
                 type: integer
                 format: int64
+                description: Minor units (cents)
               tax_rate_bps:
+                type: integer
+                format: int64
+              discount_bps:
                 type: integer
                 format: int64
 

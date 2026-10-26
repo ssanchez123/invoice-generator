@@ -20,13 +20,13 @@ The frontend and backend container images run as non-root. The API's `/health/li
 
 The API role policy is:
 
-| Role | Read invoices/customers/payments/PDF | Create or change invoices/customers/payments | Audit |
+| Role | Read invoices/customers/payments/PDF/subscriptions | Create or change invoices/customers/payments/subscriptions | Audit |
 |---|---:|---:|---:|
-| `admin` | Yes | Yes | Endpoint currently disabled |
+| `admin` | Yes | Yes | Read |
 | `member` | Yes | Yes | No |
 | `viewer` | Yes | No | No |
 
-Invoice updates, subscriptions, and audit queries return `501 Not Implemented`; they do not claim to persist data. Public registration remains disabled. Login requests are rate-limited per direct network peer (10 requests per minute by default), with `LOGIN_RATE_LIMIT` and `LOGIN_RATE_WINDOW` configuration. This in-process limit is defense in depth; a multi-instance deployment should also enforce rate limits at its trusted ingress.
+Invoice updates are limited to draft status. Subscription due dates generate draft invoices only; review and issue each draft manually. The relay worker recovers missed subscription periods one at a time and assigns each draft a due date 30 days after creation. It must be deployed and monitored alongside the API. Public registration remains disabled; provision each tenant with the operator-only `tenant-ops` flow in `docs/operations/onboarding.md`. Login requests are rate-limited per direct network peer (10 requests per minute by default), with `LOGIN_RATE_LIMIT` and `LOGIN_RATE_WINDOW` configuration. This in-process limit is defense in depth; a multi-instance deployment should also enforce rate limits at its trusted ingress.
 
 ## Idempotency behavior
 

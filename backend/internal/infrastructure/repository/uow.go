@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/santiagossaa/invoice-generator/internal/ctxkey"
 	"github.com/santiagossaa/invoice-generator/internal/domain/port"
 )
 
@@ -30,7 +31,8 @@ func (u *UnitOfWork) BeginTx(ctx context.Context, tenantID string) (context.Cont
 	wrapped := &pgxTxWrapper{tx: tx}
 
 	// Return a context with the transaction set
-	txCtx := port.CtxWithTx(ctx, tx)
+	txCtx := context.WithValue(ctx, ctxkey.TenantIDKey, tenantID)
+	txCtx = port.CtxWithTx(txCtx, tx)
 
 	return txCtx, wrapped, nil
 }

@@ -88,6 +88,27 @@ func (r *TenantRepository) Save(ctx context.Context, tenant *entity.Tenant) erro
 	return nil
 }
 
+func (r *TenantRepository) ListIDs(ctx context.Context) ([]string, error) {
+	rows, err := r.db.pool.Query(ctx, `SELECT id FROM tenants ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list tenant IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var tenantIDs []string
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return nil, fmt.Errorf("scan tenant ID: %w", err)
+		}
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tenant IDs: %w", err)
+	}
+	return tenantIDs, nil
+}
+
 // TaxRuleRepository implements port.TaxResolverPort using PostgreSQL.
 type TaxRuleRepository struct {
 	db *DB

@@ -77,6 +77,10 @@ export default function Login() {
               />
               <small>Solicítalo al administrador de tu cuenta.</small>
             </label>
+            <div className="notice notice-info login-access-note">
+              <span className="notice-icon" aria-hidden="true">i</span>
+              <p>El registro público está deshabilitado. El acceso se habilita mediante aprovisionamiento controlado por el operador.</p>
+            </div>
 
             <label className="field">
               <span>Correo electrónico</span>

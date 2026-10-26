@@ -39,12 +39,12 @@ The focus is on **backend engineering**: domain modeling, separation of concerns
 | 🏢 **Multi-tenancy** | Row-Level Security (RLS) at the PostgreSQL level — defense-in-depth tenant isolation |
 | 💰 **Multi-currency** | Integer-based Money (no floating-point bugs), ISO 4217 compliant |
 | 🧾 **Jurisdiction-aware tax** | Tax rules per country/region, resolved per invoice line |
-| 🔁 **Recurring billing** | Planned; subscription endpoints explicitly return `501 Not Implemented` |
+| 🔁 **Recurring billing** | Managed subscriptions create draft invoices for manual review and issuance; overdue cycles are recovered gradually |
 | ⚡ **CQRS** | Separate command (write) and query (read) handlers with independent evolution paths |
 | 📨 **Domain Events + Outbox** | Reliable async processing via the transactional outbox pattern |
 | 📄 **PDF generation** | Separate microservice for CPU-bound PDF rendering |
 | 🔑 **Idempotency keys** | Durable tenant-scoped response replay for keyed state-changing POST requests |
-| 📋 **Audit trail** | Storage schema exists; the audit API remains disabled until writes and queries are implemented |
+| 📋 **Audit trail** | Append-only tenant-scoped events for invoices, customers, subscriptions, and provisioning; administrator-only query API |
 | 🔢 **Invoice numbering** | Tenant-scoped sequential, gap-resistant via DB sequences |
 | 🗑️ **Soft deletes** | Never hard-delete — preserve audit integrity |
 | 🔐 **JWT authentication** | Bearer token auth with tenant-scoped context (scaffold) |
@@ -265,7 +265,7 @@ cd backend && go test -v ./internal/domain/entity/...
 - [ ] Prometheus metrics + Grafana dashboards
 - [ ] Kubernetes deployment manifests
 - [ ] DIAN technology-provider integration and fiscal validation flow
-- [ ] Recurring subscriptions and audit API implementation
+- [x] Closed tenant onboarding, draft-only invoice editing, recurring draft generation, and administrator audit API
 - [ ] Internationalization (i18n) for frontend
 
 ## Contributing

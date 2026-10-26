@@ -68,16 +68,32 @@ type PaymentRepository interface {
 // SubscriptionRepository is the port for subscription persistence.
 type SubscriptionRepository interface {
 	Save(ctx context.Context, sub *entity.Subscription) error
+	SaveTx(ctx context.Context, sub *entity.Subscription) error
 	FindByID(ctx context.Context, id string) (*entity.Subscription, error)
+	FindByIDForUpdate(ctx context.Context, id string) (*entity.Subscription, error)
+	FindByTenant(ctx context.Context, tenantID, status string, limit, offset int) ([]*entity.Subscription, int, error)
 	// FindDue returns active subscriptions whose next_billing_date is <= asOf.
-	FindDue(ctx context.Context, asOf time.Time, limit int) ([]*entity.Subscription, error)
-	UpdateNextBillingDate(ctx context.Context, id string, nextDate time.Time) error
+	FindDueForUpdate(ctx context.Context, asOf time.Time, limit int) ([]*entity.Subscription, error)
 }
 
 // TenantRepository is the port for tenant persistence.
 type TenantRepository interface {
 	FindByID(ctx context.Context, id string) (*entity.Tenant, error)
 	Save(ctx context.Context, tenant *entity.Tenant) error
+	ListIDs(ctx context.Context) ([]string, error)
+}
+
+type AuditFilter struct {
+	TenantID   string
+	EntityType string
+	EntityID   string
+	Action     string
+	Limit      int
+	Offset     int
+}
+
+type AuditRepository interface {
+	List(ctx context.Context, filter AuditFilter) ([]entity.AuditEntry, int, error)
 }
 
 // OutboxRepository is the port for the transactional outbox.

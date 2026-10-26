@@ -127,6 +127,35 @@ func (inv *Invoice) RemoveItem(itemID string) error {
 	return ErrItemNotFound
 }
 
+// UpdateDraft replaces editable fields on a draft invoice.
+func (inv *Invoice) UpdateDraft(customerID string, dueDate time.Time, currency string, items []InvoiceItem, notes string, metadata map[string]any) error {
+	if inv.Status != InvoiceStatusDraft {
+		return ErrInvalidStatusTransition
+	}
+	if customerID == "" || dueDate.IsZero() || currency == "" || len(items) == 0 {
+		return ErrInvalidInvoiceDetails
+	}
+	for _, item := range items {
+		if item.ID == "" || item.Description == "" || item.Quantity <= 0 ||
+			len(item.Description) > 240 || item.UnitPrice.Currency != currency || item.UnitPrice.Amount < 0 ||
+			item.TaxRateBPS < 0 || item.DiscountBPS < 0 || item.DiscountBPS > 10000 {
+			return ErrInvalidInvoiceDetails
+		}
+	}
+
+	inv.CustomerID = customerID
+	inv.DueDate = dueDate
+	inv.Currency = currency
+	inv.Items = append([]InvoiceItem(nil), items...)
+	inv.Notes = notes
+	inv.Metadata = metadata
+	if inv.Metadata == nil {
+		inv.Metadata = make(map[string]any)
+	}
+	inv.UpdatedAt = time.Now()
+	return inv.recalculate()
+}
+
 // Issue transitions the invoice from draft to issued.
 func (inv *Invoice) Issue(at time.Time) error {
 	if inv.Status != InvoiceStatusDraft {

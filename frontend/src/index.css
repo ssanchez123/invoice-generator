@@ -221,6 +221,11 @@ a { color: inherit; }
 .notice-warning { border-color: #f3e2b9; background: var(--warning-bg); color: #75501b; }
 .notice-icon { display: grid; flex: 0 0 19px; width: 19px; height: 19px; place-items: center; border: 1px solid currentColor; border-radius: 50%; font-size: 11px; font-weight: 700; line-height: 1; }
 .notice-info strong { margin-right: 5px; color: #24466f; }
+.login-access-note { margin: 0; padding: 10px 12px; font-size: 12px; }
+.audit-filter-action { justify-content: flex-end; }
+.audit-payload { max-width: 360px; overflow: auto; padding: 10px; border-radius: 8px; background: #f5f7fa; font-size: 11px; }
+.subscription-currency-field { max-width: 220px; margin-top: 16px; }
+.muted-copy.subscription-empty-copy { color: #59677b; }
 .notice-compact { margin-top: 15px; margin-bottom: 0; }
 
 .alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; margin-bottom: 15px; border: 1px solid transparent; border-radius: 7px; font-size: 11px; line-height: 1.5; }

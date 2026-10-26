@@ -37,6 +37,16 @@ export default function App() {
             <span className="nav-icon" aria-hidden="true">♙</span>
             <span>Clientes</span>
           </NavLink>
+          <NavLink to="/subscriptions" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+            <span className="nav-icon" aria-hidden="true">↻</span>
+            <span>Suscripciones</span>
+          </NavLink>
+          {user?.role === 'admin' && (
+            <NavLink to="/audit" className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+              <span className="nav-icon" aria-hidden="true">◷</span>
+              <span>Auditoría</span>
+            </NavLink>
+          )}
         </nav>
 
         <a className="api-docs-link" href="/swagger/" target="_blank" rel="noopener noreferrer">

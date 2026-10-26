@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/santiagossaa/invoice-generator/internal/domain/entity"
@@ -34,4 +35,15 @@ func (r *InMemoryTenantRepository) Save(ctx context.Context, tenant *entity.Tena
 	clone := *tenant
 	r.tenants[tenant.ID] = &clone
 	return nil
+}
+
+func (r *InMemoryTenantRepository) ListIDs(ctx context.Context) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	tenantIDs := make([]string, 0, len(r.tenants))
+	for tenantID := range r.tenants {
+		tenantIDs = append(tenantIDs, tenantID)
+	}
+	sort.Strings(tenantIDs)
+	return tenantIDs, nil
 }

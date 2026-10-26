@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ApiError, api, downloadInvoicePDF, type Customer, type Invoice, type Payment } from '../api'
+import { ApiError, api, downloadInvoicePDF, getStoredUser, type Customer, type Invoice, type Payment } from '../api'
 import StatusBadge from '../components/StatusBadge'
 import { calculateItemTotals, formatDate, formatMoney, parseAmountToMinorUnits } from '../format'
 
@@ -23,6 +23,7 @@ function itemTotal(item: NonNullable<Invoice['items']>[number]): number {
 
 export default function InvoiceDetail() {
   const { id } = useParams<{ id: string }>()
+  const canManage = getStoredUser()?.role === 'admin' || getStoredUser()?.role === 'member'
   const paymentIdempotency = useRef<{ signature: string; key: string } | null>(null)
   const [invoice, setInvoice] = useState<Invoice | null>(null)
   const [customer, setCustomer] = useState<Customer | null>(null)
@@ -76,9 +77,9 @@ export default function InvoiceDetail() {
 
   const totalPaid = useMemo(() => payments.reduce((sum, payment) => sum + payment.amount, 0), [payments])
   const balance = Math.max(0, (invoice?.total || 0) - totalPaid)
-  const canIssue = invoice?.status === 'draft'
-  const canCancel = invoice?.status === 'draft' || invoice?.status === 'issued'
-  const canPay = (invoice?.status === 'issued' || invoice?.status === 'overdue') && balance > 0
+  const canIssue = canManage && invoice?.status === 'draft'
+  const canCancel = canManage && (invoice?.status === 'draft' || invoice?.status === 'issued')
+  const canPay = canManage && (invoice?.status === 'issued' || invoice?.status === 'overdue') && balance > 0
 
   const handleIssue = async () => {
     if (!id || !window.confirm('¿Marcar esta factura como emitida? Esta acción genera el PDF interno, pero no la envía ni valida ante la DIAN.')) return
@@ -194,6 +195,7 @@ export default function InvoiceDetail() {
           <p className="page-description">Creada el {formatDate(invoice.created_at)}</p>
         </div>
         <div className="heading-actions">
+          {canIssue && <Link to={`/invoices/${invoice.id}/edit`} className="button button-secondary">Editar borrador</Link>}
           {invoice.status !== 'draft' && invoice.status !== 'cancelled' && (
             <button className="button button-secondary" onClick={() => void handlePDFDownload()} disabled={busy}>
               <span aria-hidden="true">↓</span> Descargar PDF

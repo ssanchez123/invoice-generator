@@ -58,6 +58,14 @@ async function seedSession(page: Page) {
 async function mockApi(page: Page) {
   let payments: Array<Record<string, unknown>> = []
   let customers = [customer]
+  let subscriptions: Array<Record<string, unknown>> = []
+  const draftInvoice = {
+    ...invoice,
+    id: 'invoice-draft',
+    number: 'INV-2026-0003',
+    status: 'draft' as const,
+    issue_date: null,
+  }
 
   await page.route('**/api/v1/**', async route => {
     const request = route.request()
@@ -97,6 +105,15 @@ async function mockApi(page: Page) {
       await route.fulfill({ json: invoice })
       return
     }
+    if (path === `/api/v1/invoices/${draftInvoice.id}` && method === 'GET') {
+      await route.fulfill({ json: draftInvoice })
+      return
+    }
+    if (path === `/api/v1/invoices/${draftInvoice.id}` && method === 'PATCH') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      await route.fulfill({ json: { ...draftInvoice, ...body } })
+      return
+    }
     if (path === '/api/v1/customers' && method === 'GET') {
       await route.fulfill({ json: { data: customers } })
       return
@@ -130,6 +147,52 @@ async function mockApi(page: Page) {
       }
       payments = [payment]
       await route.fulfill({ status: 201, json: payment })
+      return
+    }
+    if (path === '/api/v1/subscriptions' && method === 'GET') {
+      await route.fulfill({ json: { data: subscriptions, total: subscriptions.length } })
+      return
+    }
+    if (path === '/api/v1/subscriptions' && method === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      const subscription = {
+        id: 'subscription-1',
+        tenant_id: 'tenant-1',
+        customer_id: customer.id,
+        plan_items: body.items,
+        currency: body.currency,
+        frequency: body.frequency,
+        next_billing_date: body.next_billing_date,
+        billing_day: 15,
+        status: 'active',
+        created_at: '2026-10-22T12:00:00Z',
+        updated_at: '2026-10-22T12:00:00Z',
+      }
+      subscriptions = [subscription]
+      await route.fulfill({ status: 201, json: subscription })
+      return
+    }
+    if (path === '/api/v1/subscriptions/subscription-1' && method === 'DELETE') {
+      subscriptions = subscriptions.map(subscription => ({ ...subscription, status: 'cancelled' }))
+      await route.fulfill({ json: { status: 'cancelled' } })
+      return
+    }
+    if (path === '/api/v1/audit' && method === 'GET') {
+      await route.fulfill({
+        json: {
+          data: [{
+            id: 'audit-1',
+            tenant_id: 'tenant-1',
+            entity_type: 'invoice',
+            entity_id: invoice.id,
+            action: 'invoice.issued',
+            actor_id: 'user-1',
+            payload: { status: 'issued' },
+            created_at: '2026-10-01T12:00:00Z',
+          }],
+          total: 1,
+        },
+      })
       return
     }
     await route.fulfill({ status: 404, json: { error: 'Mock endpoint not found' } })
@@ -171,6 +234,50 @@ test('creates an invoice with integer minor-unit amounts', async ({ page }) => {
 
   expect(body.items[0].unit_price).toBe(125050)
   await expect(page).toHaveURL(/\/invoices\/invoice-created$/)
+})
+
+test('updates only a draft invoice using integer minor-unit amounts', async ({ page }) => {
+  await seedSession(page)
+  await mockApi(page)
+  await page.goto('/invoices/invoice-draft/edit')
+  await expect(page.getByRole('heading', { name: 'Editar factura' })).toBeVisible()
+  await page.getByLabel('Precio unitario (COP)').fill('1500.25')
+  const updateRequest = page.waitForRequest(request =>
+    request.url().endsWith('/api/v1/invoices/invoice-draft') && request.method() === 'PATCH',
+  )
+  await page.getByRole('button', { name: 'Guardar cambios' }).click()
+  const request = await updateRequest
+  const body = request.postDataJSON() as { items: { unit_price: number }[] }
+  expect(body.items[0].unit_price).toBe(150025)
+  await expect(page).toHaveURL(/\/invoices\/invoice-draft$/)
+})
+
+test('creates a recurring subscription as a draft-only schedule', async ({ page }) => {
+  await seedSession(page)
+  await mockApi(page)
+  await page.goto('/subscriptions')
+  await expect(page.getByRole('heading', { name: 'Suscripciones', exact: true })).toBeVisible()
+  await page.getByLabel('Próximo cobro *').fill('2026-12-15')
+  await page.getByLabel('Descripción').fill('Servicio mensual')
+  await page.getByLabel('Precio unitario (COP)').fill('250000')
+  const createRequest = page.waitForRequest(request =>
+    request.url().endsWith('/api/v1/subscriptions') && request.method() === 'POST',
+  )
+  await page.getByRole('button', { name: 'Crear suscripción' }).click()
+  const request = await createRequest
+  const body = request.postDataJSON() as { items: { unit_price: number }[]; next_billing_date: string }
+  expect(body.items[0].unit_price).toBe(25000000)
+  expect(body.next_billing_date).toBe('2026-12-15T05:00:00.000Z')
+  await expect(page.getByRole('status')).toContainText('generará un borrador')
+  await expect(page.getByText('Comercial Andina S.A.S.').last()).toBeVisible()
+})
+
+test('admin can inspect the immutable audit log', async ({ page }) => {
+  await seedSession(page)
+  await mockApi(page)
+  await page.goto('/audit')
+  await expect(page.getByRole('heading', { name: 'Registro de auditoría' })).toBeVisible()
+  await expect(page.getByText('invoice.issued')).toBeVisible()
 })
 
 test('records a payment in minor units and refreshes the balance', async ({ page }) => {
@@ -264,6 +371,17 @@ test('customer detail has no automated WCAG A/AA violations', async ({ page }) =
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto(`/customers/${customer.id}`)
   await expect(page.getByRole('heading', { name: customer.name, exact: true })).toBeVisible()
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+    .analyze()
+  expect(results.violations).toEqual([])
+})
+
+test('subscriptions page has no automated WCAG A/AA violations', async ({ page }) => {
+  await seedSession(page)
+  await mockApi(page)
+  await page.goto('/subscriptions')
+  await expect(page.getByRole('heading', { name: 'Suscripciones', exact: true })).toBeVisible()
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
     .analyze()

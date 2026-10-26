@@ -45,12 +45,12 @@ func TestProtectedRoutesEnforceRolePolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("member reaches supported write policy but endpoint remains disabled", func(t *testing.T) {
+	t.Run("member reaches write handler", func(t *testing.T) {
 		req := routeRequest(t, tokenService, "member", http.MethodPatch, "/api/v1/invoices/invoice-1")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		if w.Code != http.StatusNotImplemented {
-			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusNotImplemented, w.Body.String())
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
 		}
 	})
 
@@ -63,12 +63,12 @@ func TestProtectedRoutesEnforceRolePolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("administrator reaches audit route and receives explicit disabled status", func(t *testing.T) {
+	t.Run("administrator reaches audit handler", func(t *testing.T) {
 		req := routeRequest(t, tokenService, "admin", http.MethodGet, "/api/v1/audit")
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
-		if w.Code != http.StatusNotImplemented {
-			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusNotImplemented, w.Body.String())
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
 		}
 	})
 }

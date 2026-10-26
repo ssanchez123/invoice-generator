@@ -8,7 +8,10 @@ import InvoiceDetail from './pages/InvoiceDetail'
 import CreateInvoice from './pages/CreateInvoice'
 import Customers from './pages/Customers'
 import CustomerDetail from './pages/CustomerDetail'
-import { isAuthenticated } from './api'
+import Subscriptions from './pages/Subscriptions'
+import AuditLog from './pages/AuditLog'
+import EditInvoice from './pages/EditInvoice'
+import { getStoredUser, isAuthenticated } from './api'
 import './index.css'
 
 // ProtectedRoute wraps routes that require authentication
@@ -16,6 +19,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) {
     return <Navigate to="/login" replace />
   }
+  return <>{children}</>
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  if (getStoredUser()?.role !== 'admin') return <Navigate to="/" replace />
   return <>{children}</>
 }
 
@@ -27,9 +35,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <Route path="/" element={<ProtectedRoute><App /></ProtectedRoute>}>
           <Route index element={<InvoiceList />} />
           <Route path="invoices/new" element={<CreateInvoice />} />
+          <Route path="invoices/:id/edit" element={<EditInvoice />} />
           <Route path="invoices/:id" element={<InvoiceDetail />} />
           <Route path="customers" element={<Customers />} />
           <Route path="customers/:id" element={<CustomerDetail />} />
+          <Route path="subscriptions" element={<Subscriptions />} />
+          <Route path="audit" element={<AdminRoute><AuditLog /></AdminRoute>} />
           <Route path="*" element={
             <section className="empty-state">
               <span className="empty-state-icon" aria-hidden="true">?</span>

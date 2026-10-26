@@ -33,6 +33,7 @@ func setupDeps() {
 		IssueInvoice:  commandHandler.NewIssueInvoiceHandler(invoiceRepo),
 		CancelInvoice: commandHandler.NewCancelInvoiceHandler(invoiceRepo),
 		RecordPayment: commandHandler.NewRecordPaymentHandler(invoiceRepo, paymentRepo, uow),
+		UpdateInvoice: commandHandler.NewUpdateInvoiceHandler(invoiceRepo, customerRepo, uow),
 		ListInvoices:  queryHandler.NewListInvoicesHandler(invoiceRepo),
 		GetInvoice:    queryHandler.NewGetInvoiceHandler(invoiceRepo),
 		ListCustomers: queryHandler.NewListCustomersHandler(customerRepo),
@@ -328,28 +329,28 @@ func TestCreateCustomerValidation(t *testing.T) {
 	}
 }
 
-func TestUnsupportedHandlersReturnNotImplemented(t *testing.T) {
-	tests := []struct {
-		name    string
-		handler http.HandlerFunc
-	}{
-		{name: "invoice update", handler: handler.UpdateInvoice},
-		{name: "subscription create", handler: handler.CreateSubscription},
-		{name: "subscription list", handler: handler.ListSubscriptions},
-		{name: "subscription cancel", handler: handler.CancelSubscription},
-		{name: "audit list", handler: handler.ListAuditEntries},
+func TestUpdateInvoiceRejectsInvalidDueDate(t *testing.T) {
+	setupDeps()
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/invoices/invoice-1", bytes.NewBufferString(`{"due_date":"invalid"}`))
+	req = tenantCtx(req, "tenant-001")
+	routeCtx := chi.NewRouteContext()
+	routeCtx.URLParams.Add("id", "invoice-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, routeCtx))
+	w := httptest.NewRecorder()
+	handler.UpdateInvoice(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			test.handler(w, httptest.NewRequest(http.MethodPost, "/", nil))
-			if w.Code != http.StatusNotImplemented {
-				t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusNotImplemented, w.Body.String())
-			}
-			if !bytes.Contains(w.Body.Bytes(), []byte(`"error"`)) {
-				t.Fatalf("response should contain an explicit error: %s", w.Body.String())
-			}
-		})
+}
+
+func TestCreateSubscriptionReportsMissingConfiguration(t *testing.T) {
+	setupDeps()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/subscriptions", bytes.NewBufferString(`{}`))
+	req = tenantCtx(req, "tenant-001")
+	w := httptest.NewRecorder()
+	handler.CreateSubscription(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusServiceUnavailable, w.Body.String())
 	}
 }
 

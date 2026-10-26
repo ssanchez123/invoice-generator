@@ -70,6 +70,7 @@ func JWTAuth(tokenService port.TokenService) func(next http.Handler) http.Handle
 			// Inject claims into context
 			ctx := r.Context()
 			ctx = context.WithValue(ctx, ctxkey.TenantIDKey, claims.TenantID)
+			ctx = context.WithValue(ctx, ctxkey.ActorIDKey, claims.UserID)
 			ctx = context.WithValue(ctx, UserIDKey, claims.UserID)
 			ctx = context.WithValue(ctx, UserRoleKey, claims.Role)
 			ctx = context.WithValue(ctx, EmailKey, claims.Email)
@@ -225,11 +226,11 @@ func evictOldestLoginBucket(buckets map[string]loginRateBucket) {
 	delete(buckets, oldestKey)
 }
 
-// Idempotency stores and replays keyed POST responses within the authenticated tenant.
+// Idempotency stores and replays keyed POST and DELETE responses within the authenticated tenant.
 func Idempotency(repository port.IdempotencyRepository) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost {
+			if r.Method != http.MethodPost && r.Method != http.MethodDelete {
 				next.ServeHTTP(w, r)
 				return
 			}

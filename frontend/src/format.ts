@@ -36,6 +36,10 @@ export function dateAtEndOfLocalDay(value: string): string {
   return new Date(`${value}T23:59:59`).toISOString()
 }
 
+export function dateAtStartOfColombiaDay(value: string): string {
+  return new Date(`${value}T00:00:00-05:00`).toISOString()
+}
+
 export function parseAmountToMinorUnits(value: string): number | null {
   if (!/^\d+(?:\.\d{0,2})?$/.test(value)) return null
   const [whole, fraction = ''] = value.split('.')

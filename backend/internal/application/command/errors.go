@@ -7,9 +7,10 @@ import (
 )
 
 var (
-	ErrCustomerNotInTenant = errors.New("customer does not belong to tenant")
-	ErrInvoiceNotInTenant  = errors.New("invoice does not belong to tenant")
-	ErrPaymentNotFound     = errors.New("payment not found")
+	ErrCustomerNotInTenant     = errors.New("customer does not belong to tenant")
+	ErrInvoiceNotInTenant      = errors.New("invoice does not belong to tenant")
+	ErrSubscriptionNotInTenant = errors.New("subscription does not belong to tenant")
+	ErrPaymentNotFound         = errors.New("payment not found")
 
 	// Auth errors
 	ErrInvalidEmail       = errors.New("invalid email")
